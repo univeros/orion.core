@@ -27,6 +27,7 @@ use function explode;
 use function is_array;
 use function is_bool;
 use function is_numeric;
+use function is_scalar;
 use function preg_split;
 use function sqrt;
 use function str_starts_with;
@@ -68,7 +69,11 @@ final readonly class Matcher
             return 0.0;
         }
         if ($field->type !== FieldType::Text) {
-            return $this->anyEquals($values, $clause->value) ? 1.0 : 0.0;
+            $matches = $clause->kind === ClauseKind::Prefix
+                ? array_filter($values, static fn($value): bool => is_scalar($value) && str_starts_with((string) $value, (string) $clause->value)) !== []
+                : $this->anyEquals($values, $clause->value);
+
+            return $matches ? 1.0 : 0.0;
         }
         $hits = 0;
         foreach ($values as $value) {

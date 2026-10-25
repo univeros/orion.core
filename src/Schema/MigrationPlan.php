@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Orion\Schema;
 
+use LogicException;
 use Orion\IndexName;
 
 use function array_filter;
@@ -11,6 +12,7 @@ use function array_keys;
 use function array_push;
 use function array_unique;
 use function array_values;
+use function sprintf;
 use function strcmp;
 use function usort;
 
@@ -68,6 +70,27 @@ final readonly class MigrationPlan
     public function requiresReindex(): bool
     {
         return $this->breaking() !== [];
+    }
+
+    /**
+     * The live fields with this plan's additions applied, for an adapter's in-place `apply()`.
+     *
+     * @param list<Field> $live
+     * @return list<Field>
+     * @throws LogicException when the plan has breaking changes: those need a reindex, never an in-place apply
+     */
+    public function applyTo(array $live): array
+    {
+        if ($this->requiresReindex()) {
+            throw new LogicException(sprintf('The plan for %s has breaking changes; they need a reindex, never an in-place apply.', $this->index->value));
+        }
+        foreach ($this->changes as $change) {
+            if ($change->kind === ChangeKind::Added && $change->after !== null) {
+                $live = Field::addAt($live, $change->path, $change->after);
+            }
+        }
+
+        return $live;
     }
 
     /**

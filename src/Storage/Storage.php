@@ -42,7 +42,7 @@ interface Storage
     /**
      * @param array<string, mixed> $criteria
      * @param array<string, mixed> $data
-     * @return int affected rows
+     * @return int the rows the criteria matched, changed or not
      */
     public function update(string $table, array $criteria, array $data): int;
 

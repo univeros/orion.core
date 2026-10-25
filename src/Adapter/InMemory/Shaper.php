@@ -11,14 +11,19 @@ use Orion\Query\Facet;
 use Orion\Query\Sort;
 
 use function array_slice;
+use function htmlspecialchars;
 use function in_array;
 use function is_bool;
+use function preg_match;
 use function preg_replace_callback;
 use function str_starts_with;
 use function strcmp;
 use function strtolower;
 use function uksort;
 use function usort;
+
+use const ENT_QUOTES;
+use const ENT_SUBSTITUTE;
 
 /**
  * Orders matched documents, counts facets and marks highlights, the way a search engine shapes a response.
@@ -79,7 +84,8 @@ final readonly class Shaper
     }
 
     /**
-     * The whole field value with each matched token wrapped in `<em>`, for every requested text field that matched.
+     * The whole field value, HTML-escaped, with each matched token wrapped in `<em>`, for every requested text field
+     * that matched.
      *
      * @param array<string, mixed> $source
      * @param list<string> $fields
@@ -105,22 +111,20 @@ final readonly class Shaper
             $fragments = [];
             foreach ($this->matcher->values($source, $field) as $value) {
                 $marked = 0;
-                $fragment = preg_replace_callback('/[\p{L}\p{N}]+/u', static function (array $word) use ($terms, $prefixes, &$marked): string {
-                    $token = strtolower($word[0]);
+                // Every piece is escaped, so the fragment is HTML whose only markup is <em>.
+                $fragment = preg_replace_callback('/[\p{L}\p{N}]+|[^\p{L}\p{N}]+/u', static function (array $piece) use ($terms, $prefixes, &$marked): string {
+                    $escaped = htmlspecialchars($piece[0], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                    $token = strtolower($piece[0]);
+                    $matches = in_array($token, $terms, true);
                     foreach ($prefixes as $prefix) {
-                        if (str_starts_with($token, $prefix)) {
-                            ++$marked;
-
-                            return '<em>' . $word[0] . '</em>';
-                        }
+                        $matches = $matches || ($prefix !== '' && str_starts_with($token, $prefix));
                     }
-                    if (in_array($token, $terms, true)) {
-                        ++$marked;
-
-                        return '<em>' . $word[0] . '</em>';
+                    if (!$matches || preg_match('/^[\p{L}\p{N}]+$/u', $piece[0]) !== 1) {
+                        return $escaped;
                     }
+                    ++$marked;
 
-                    return $word[0];
+                    return '<em>' . $escaped . '</em>';
                 }, (string) $value);
                 if ($marked > 0 && $fragment !== null) {
                     $fragments[] = $fragment;

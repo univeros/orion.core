@@ -142,6 +142,27 @@ final class MigrationPlanTest extends TestCase
         self::assertEquals(MigrationPlan::between($desired, $live), MigrationPlan::between($desired, $live));
     }
 
+    public function testAnAdditivePlanAppliesToTheLiveFields(): void
+    {
+        $plan = MigrationPlan::between(
+            IndexSchema::for('products')->keyword('sku')->keyword('brand')->nested('variants', Field::keyword('size'), Field::keyword('color')),
+            self::live(Field::keyword('sku'), Field::nested('variants', Field::keyword('size'))),
+        );
+
+        $fields = $plan->applyTo(self::live(Field::keyword('sku'), Field::nested('variants', Field::keyword('size')))->fields);
+
+        self::assertTrue(MigrationPlan::between(IndexSchema::for('products')->keyword('sku')->keyword('brand')->nested('variants', Field::keyword('size'), Field::keyword('color')), new LiveSchema(IndexName::of('products_v1'), $fields))->isEmpty());
+    }
+
+    public function testABreakingPlanDoesNotApply(): void
+    {
+        $plan = MigrationPlan::between(IndexSchema::for('products')->float('sku'), self::live(Field::keyword('sku')));
+
+        $this->expectException(\LogicException::class);
+
+        $plan->applyTo([Field::keyword('sku')]);
+    }
+
     private static function live(Field ...$fields): LiveSchema
     {
         return new LiveSchema(IndexName::of('products_v1'), array_values($fields));
