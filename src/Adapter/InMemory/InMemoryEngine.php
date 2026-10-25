@@ -34,7 +34,6 @@ use function array_is_list;
 use function array_map;
 use function array_slice;
 use function count;
-use function explode;
 use function hrtime;
 use function in_array;
 use function is_array;
@@ -135,7 +134,7 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
         $fields = $this->stored($plan->index)['fields'];
         foreach ($plan->additive() as $change) {
             if ($change->kind === ChangeKind::Added && $change->after !== null) {
-                $fields = self::addAt($fields, explode('.', $change->path), $change->after);
+                $fields = Field::addAt($fields, $change->path, $change->after);
             }
         }
         $this->indices[$plan->index->value]['fields'] = $fields;
@@ -325,27 +324,5 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
         }
 
         return null;
-    }
-
-    /**
-     * @param list<Field> $fields
-     * @param list<string> $path
-     * @return list<Field>
-     */
-    private static function addAt(array $fields, array $path, Field $field): array
-    {
-        if (count($path) === 1) {
-            return [...$fields, $field];
-        }
-        $head = $path[0];
-
-        return array_map(static function (Field $existing) use ($head, $path, $field): Field {
-            if ($existing->name !== $head) {
-                return $existing;
-            }
-            $children = self::addAt($existing->fields, array_slice($path, 1), $field);
-
-            return $existing->type === FieldType::Nested ? Field::nested($existing->name, ...$children) : Field::object($existing->name, ...$children);
-        }, $fields);
     }
 }

@@ -8,8 +8,10 @@ use InvalidArgumentException;
 use Orion\Support\Assert;
 use Orion\Support\Input;
 
+use function array_map;
 use function array_values;
 use function count;
+use function explode;
 use function preg_match;
 use function sprintf;
 
@@ -125,6 +127,30 @@ final readonly class Field
     public static function unknown(string $name): self
     {
         return new self($name, FieldType::Unknown);
+    }
+
+    /**
+     * The fields with `$field` added at a dotted path (`variants.color` adds `color` inside `variants`), for adapters
+     * applying an additive plan to what is live.
+     *
+     * @param list<self> $fields
+     * @return list<self>
+     */
+    public static function addAt(array $fields, string $path, self $field): array
+    {
+        $parts = explode('.', $path, 2);
+        if (count($parts) === 1) {
+            return [...$fields, $field];
+        }
+
+        return array_map(static function (self $existing) use ($parts, $field): self {
+            if ($existing->name !== $parts[0]) {
+                return $existing;
+            }
+            $children = self::addAt($existing->fields, $parts[1], $field);
+
+            return $existing->type === FieldType::Nested ? self::nested($existing->name, ...$children) : self::object($existing->name, ...$children);
+        }, $fields);
     }
 
     /**
