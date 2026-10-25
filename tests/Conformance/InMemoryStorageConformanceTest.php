@@ -22,4 +22,9 @@ final class InMemoryStorageConformanceTest extends StorageConformanceTestCase
     {
         $this->host->insert($table, $row);
     }
+
+    protected function inHostTransaction(callable $work): void
+    {
+        $this->host->transaction($work);
+    }
 }
