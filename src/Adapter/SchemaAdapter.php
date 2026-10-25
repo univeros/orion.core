@@ -22,4 +22,7 @@ interface SchemaAdapter
 
     /** Applies the additive changes in place; breaking ones are never applied to a live index. */
     public function apply(MigrationPlan $plan): PendingTask;
+
+    /** Deletes a physical index; a no-op when it does not exist. */
+    public function drop(IndexName $index): void;
 }

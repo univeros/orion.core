@@ -7,6 +7,7 @@ namespace Orion\Tests\Write;
 use InvalidArgumentException;
 use Orion\Write\BulkResult;
 use Orion\Write\Document;
+use Orion\Write\Tombstone;
 use Orion\Write\WriteOutcome;
 use Orion\Write\WriteStatus;
 use PHPUnit\Framework\TestCase;
@@ -34,6 +35,26 @@ final class WriteTypesTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         new Document('42', [], -1);
+    }
+
+    public function testADeletionCarriesTheOutboxOffsetOfTheDeleteAsVersion(): void
+    {
+        $tombstone = new Tombstone('42', 9);
+
+        self::assertSame('42', $tombstone->id);
+        self::assertSame(9, $tombstone->version);
+    }
+
+    public function testATombstoneNeedsAnIdAndANonNegativeVersion(): void
+    {
+        foreach ([['', 1], ['42', -1]] as [$id, $version]) {
+            try {
+                new Tombstone($id, $version);
+                self::fail('accepted');
+            } catch (InvalidArgumentException) {
+                self::addToAssertionCount(1);
+            }
+        }
     }
 
     public function testACompletedResultSeparatesFailures(): void
