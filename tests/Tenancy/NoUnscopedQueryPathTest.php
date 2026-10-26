@@ -46,10 +46,16 @@ final class NoUnscopedQueryPathTest extends TestCase
 {
     /**
      * Where a query may go: the searcher, which scopes it through the index scope; the engine adapters it then calls;
-     * Elasticsearch's compiler, which turns a query into native DSL and executes nothing (named in pieces so this file
-     * does not trip bin/check-imports).
+     * each engine's compiler, which turns a query into native parameters and executes nothing (named in pieces so this
+     * file does not trip bin/check-imports); Solr's `NativeScope`, which restricts a native request to the scope.
      */
-    private const array REVIEWED = [Searcher::class, IndexScope::class, 'Orion\\Elastic' . 'search\\QueryCompiler'];
+    private const array REVIEWED = [
+        Searcher::class,
+        IndexScope::class,
+        'Orion\\Elastic' . 'search\\QueryCompiler',
+        'Orion\\Solr\\QueryCompiler',
+        'Orion\\Solr\\NativeScope',
+    ];
 
     public function testOnlyTheSearcherHandsAQueryToAnEngine(): void
     {
