@@ -15,6 +15,8 @@ use Psr\Clock\ClockInterface;
 
 use function array_map;
 use function max;
+use function preg_replace;
+use function trim;
 
 /**
  * Outbox entries the engine refused, one letter per entry, for retry (v1 §10). A letter is cleared when its entry
@@ -37,7 +39,10 @@ final readonly class DeadLetters
     public function record(Entry $entry, string $error): void
     {
         $key = ['index_name' => $entry->index->value, 'outbox_offset' => $entry->offset];
-        $error = Assert::truncate($error === '' ? 'The engine gave no reason.' : $error, self::MAX_ERROR_BYTES);
+        // Control characters go: PostgreSQL refuses NUL in text, and a terminal would act on escapes when it is shown.
+        $error = Assert::truncate((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', $error), self::MAX_ERROR_BYTES);
+        $error = trim((string) preg_replace('/ {2,}/', ' ', $error));
+        $error = $error === '' ? 'The engine gave no reason.' : $error;
         $existing = $this->storage->findOne(Schema::DEAD_LETTER, $key);
         $attempts = $existing === null ? 1 : Row::int($existing['attempts'], Schema::DEAD_LETTER . '.attempts') + 1;
         $letter = new DeadLetter($entry->index, $entry->offset, $entry->documentId, $error, $attempts, $this->clock->now());

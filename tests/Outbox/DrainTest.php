@@ -209,6 +209,16 @@ final class DrainTest extends TestCase
         self::assertSame([], $this->graph->deadLetters()->of($this->products));
     }
 
+    public function testAnEngineReasonIsStoredWithoutControlCharacters(): void
+    {
+        $this->build();
+        $entry = $this->graph->outbox()->index($this->products, 'p1', ['title' => 'Lamp']);
+
+        $this->graph->deadLetters()->record($entry, "refused\x00 by\tthe\nengine\x1B[31m");
+
+        self::assertSame('refused by the engine [31m', $this->graph->deadLetters()->of($this->products)[0]->error);
+    }
+
     public function testADeadLetterRoundTripsThroughItsRow(): void
     {
         $letter = new DeadLetter($this->products, 7, 'p2', 'rejected', 2, new DateTimeImmutable('2026-10-26 12:00:00+00:00'));

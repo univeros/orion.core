@@ -9,6 +9,7 @@ use Orion\IndexName;
 use Orion\Lifecycle\Operation;
 use Orion\Receipt\ReceiptStore;
 use Orion\Receipt\SodiumSigner;
+use Orion\Receipt\SodiumVerifier;
 use Orion\Receipt\Verifier;
 use Orion\Registry\IndexRegistration;
 use Orion\Schema\IndexSchema;
@@ -18,6 +19,7 @@ use Orion\Testing\InMemoryStorage;
 use PHPUnit\Framework\TestCase;
 
 use function base64_encode;
+use function strpos;
 use function str_repeat;
 
 final class VerifierTest extends TestCase
@@ -39,8 +41,9 @@ final class VerifierTest extends TestCase
     {
         $verification = $this->verifier($this->signer)->verify();
 
+        $head = $this->store($this->signer)->latest();
         self::assertTrue($verification->ok());
-        self::assertSame(['receipts' => 3, 'ok' => true, 'breaks' => []], $verification->toArray());
+        self::assertSame(['receipts' => 3, 'ok' => true, 'breaks' => [], 'head' => ['sequence' => 3, 'hash' => $head?->hash]], $verification->toArray());
     }
 
     public function testAnAlteredReceiptIsCaught(): void
@@ -98,11 +101,42 @@ final class VerifierTest extends TestCase
         self::assertSame(['receipt 1 has a signature that does not verify under kid "k1"'], $this->verifier($this->signer)->verify()->breaks);
     }
 
+    public function testThePublicKeysAloneVerifyTheChain(): void
+    {
+        $verifier = new Verifier($this->store($this->signer), SodiumVerifier::fromBase64(['k1' => base64_encode($this->signer->publicKey())]));
+
+        self::assertTrue($verifier->verify()->ok());
+        self::assertCount(3, (new Verifier($this->store($this->signer), SodiumVerifier::fromBase64(['k9' => base64_encode($this->signer->publicKey())])))->verify()->breaks);
+    }
+
+    public function testAnAnchoredHeadCatchesATailCutTogetherWithTheSequence(): void
+    {
+        $head = $this->store($this->signer)->latest();
+        $this->storage->delete(Schema::RECEIPT, ['sequence' => 3]);
+        $this->storage->update(Schema::COUNTER, ['name' => 'receipt'], ['value' => 2]);
+
+        self::assertTrue($this->verifier($this->signer)->verify()->ok(), 'Without an anchor the cut is invisible.');
+        self::assertSame(['the chain does not reach the anchored receipt 3'], $this->verifier($this->signer)->verify(3, (string) $head?->hash)->breaks);
+        self::assertSame(['receipt 2 does not match the anchored hash'], $this->verifier($this->signer)->verify(2, str_repeat('0', 64))->breaks);
+    }
+
+    public function testASignatureReencodedOutsideCanonicalBase64IsCaught(): void
+    {
+        $signature = (string) $this->store($this->signer)->find(1)?->signature;
+        // 64 bytes leave four unused bits in the last base64 character; setting one decodes to the same signature.
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        $last = strpos($alphabet, $signature[85]);
+        $signature[85] = $alphabet[$last ^ 1];
+        $this->storage->update(Schema::RECEIPT, ['sequence' => 1], ['signature' => $signature]);
+
+        self::assertSame(['receipt 1 has a signature that does not verify under kid "k1"'], $this->verifier($this->signer)->verify()->breaks);
+    }
+
     public function testAnEmptyChainVerifies(): void
     {
         $verifier = new Verifier(new ReceiptStore(new InMemoryStorage(), null, new FixedClock()), $this->signer);
 
-        self::assertSame(['receipts' => 0, 'ok' => true, 'breaks' => []], $verifier->verify()->toArray());
+        self::assertSame(['receipts' => 0, 'ok' => true, 'breaks' => [], 'head' => null], $verifier->verify()->toArray());
         self::assertSame(base64_encode($this->signer->publicKey()), base64_encode($this->signer->publicKey()));
     }
 

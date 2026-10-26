@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Orion\Receipt;
 
 use InvalidArgumentException;
+use LogicException;
 use Orion\Support\Assert;
 use Override;
 use SensitiveParameter;
@@ -118,7 +119,17 @@ final readonly class SodiumSigner implements ReceiptSigner
     {
         $publicKey = $this->publicKeys[$kid] ?? null;
 
-        return $publicKey !== null && strlen($signature) === SODIUM_CRYPTO_SIGN_BYTES && sodium_crypto_sign_verify_detached($signature, $message, $publicKey);
+        return $publicKey !== null && $publicKey !== '' && strlen($signature) === SODIUM_CRYPTO_SIGN_BYTES && sodium_crypto_sign_verify_detached($signature, $message, $publicKey);
+    }
+
+    /**
+     * A signer holds a secret key; it is never serialized, so it cannot end up in a cache or a session.
+     *
+     * @return never
+     */
+    public function __serialize(): array
+    {
+        throw new LogicException('A receipt signer holds a secret key and cannot be serialized.');
     }
 
     /**

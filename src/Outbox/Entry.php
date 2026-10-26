@@ -17,6 +17,7 @@ use Orion\Write\Tombstone;
 
 use function array_is_list;
 use function json_encode;
+use function preg_match;
 use function sprintf;
 use function strlen;
 
@@ -61,6 +62,9 @@ final readonly class Entry
     public static function assertId(string $id): string
     {
         Assert::notEmpty($id, 'A document id');
+        if (preg_match('//u', $id) !== 1) {
+            throw new InvalidArgumentException(sprintf('A document id is UTF-8 text, %s is not.', Assert::show($id)));
+        }
         if (strlen($id) > self::MAX_ID_BYTES) {
             throw new InvalidArgumentException(sprintf('A document id is at most %d bytes, %s is longer.', self::MAX_ID_BYTES, Assert::show($id)));
         }

@@ -48,6 +48,20 @@ final class SodiumSignerTest extends TestCase
         self::assertTrue($signer->verify('m', $signer->sign('m'), 'k0'));
     }
 
+    public function testASignerCannotBeSerialized(): void
+    {
+        $this->expectException(\LogicException::class);
+
+        \serialize(SodiumSigner::fromSeed(str_repeat("\x01", 32), 'k1'));
+    }
+
+    public function testAVerifierRefusesMalformedPublicKeys(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        \Orion\Receipt\SodiumVerifier::fromBase64(['k1' => \base64_encode('short')]);
+    }
+
     /**
      * @return iterable<string, array{callable(): mixed}>
      */

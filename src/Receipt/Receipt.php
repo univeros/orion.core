@@ -22,8 +22,8 @@ use function sprintf;
 
 /**
  * A signed, hash-chained record of one lifecycle operation (v1 §11, docs/spec/revision.md §3): which index, on which
- * engine, from which version to which, with which schema, over which outbox offsets. Its message is the canonical
- * JSON of every field but `hash` and `signature`; `hash` is that message's sha256, `signature` an Ed25519 signature
+ * engine, from which version to which, with which schema, over which outbox offsets. Its message is {@see DOMAIN}
+ * followed by the canonical JSON of every field but `hash` and `signature`; `hash` is that message's sha256, `signature` an Ed25519 signature
  * over it (base64), and `previous_hash` the hash of the receipt before it, so editing, removing or reordering a
  * receipt breaks the chain and re-signing needs the key. Persisted as a row of `orion_receipt`; {@see fromRow()} is
  * the inverse of {@see toRow()} and refuses unknown columns.
@@ -35,6 +35,8 @@ final readonly class Receipt
         'from_offset', 'to_offset', 'previous_hash', 'hash', 'kid', 'signature', 'recorded_at',
     ];
     private const string TIME = 'Y-m-d\TH:i:s.uP';
+    /** Prefixed to every message, so a signature over a receipt can never be taken for one over anything else. */
+    public const string DOMAIN = "orion-receipt-v1\n";
 
     public function __construct(
         public int $sequence,
@@ -98,7 +100,7 @@ final readonly class Receipt
      */
     public function message(): string
     {
-        return Canonical::json([
+        return self::DOMAIN . Canonical::json([
             'sequence' => $this->sequence,
             'operation' => $this->operation->value,
             'index' => $this->index->value,

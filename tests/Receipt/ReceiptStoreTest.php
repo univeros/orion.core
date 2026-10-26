@@ -56,7 +56,7 @@ final class ReceiptStoreTest extends TestCase
     {
         $receipt = $this->store->append(Operation::Created, self::registration(1), null, 0, 0, 0);
 
-        self::assertSame(Canonical::json([
+        self::assertSame("orion-receipt-v1\n" . Canonical::json([
             'document_count' => 0,
             'engine' => 'memory',
             'from_offset' => 0,

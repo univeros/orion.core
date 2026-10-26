@@ -160,6 +160,7 @@ final class OutboxTest extends TestCase
     {
         yield 'empty id' => ['', ['title' => 'Lamp']];
         yield 'id longer than the column' => [str_repeat('x', 256), ['title' => 'Lamp']];
+        yield 'id that is not UTF-8' => ["p\xFF1", ['title' => 'Lamp']];
         yield 'fields as a list' => ['p1', ['Lamp', 'Desk']];
         yield 'a value JSON cannot hold' => ['p1', ['price' => NAN]];
         yield 'a resource' => ['p1', ['file' => fopen('php://memory', 'r')]];

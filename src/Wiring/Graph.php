@@ -108,13 +108,16 @@ final class Graph
     }
 
     /**
-     * @throws LogicException without a configured signer: signatures cannot be checked without its keys
+     * Uses the configured verifier (public keys only), else the signer's keys.
+     *
+     * @throws LogicException with neither: signatures cannot be checked without keys
      */
     public function verifier(): Verifier
     {
-        $signer = $this->config->receiptSigner ?? throw new LogicException('Verifying receipts needs the ReceiptSigner that holds their keys; pass one in the Config.');
+        $keys = $this->config->receiptVerifier ?? $this->config->receiptSigner
+            ?? throw new LogicException('Verifying receipts needs their public keys: pass a ReceiptVerifier (or the ReceiptSigner) in the Config.');
 
-        return $this->once(Verifier::class, fn(): Verifier => new Verifier($this->receipts(), $signer));
+        return $this->once(Verifier::class, fn(): Verifier => new Verifier($this->receipts(), $keys, $this->aliases()));
     }
 
     public function metrics(): Metrics

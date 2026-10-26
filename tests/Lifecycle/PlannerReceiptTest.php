@@ -74,6 +74,19 @@ final class PlannerReceiptTest extends TestCase
         self::assertSame(1, $this->storage->count(Schema::RECEIPT, []));
     }
 
+    public function testAChangeMadeWithReceiptsOffIsCaughtByVerify(): void
+    {
+        $this->graph->planner('memory')->apply(self::schema());
+        // Someone applies a change through a bootstrap without the key: the registry moves, no receipt is issued.
+        $this->graph(null)->planner('memory')->apply(IndexSchema::for('products')->text('title', boost: 2.0));
+
+        $breaks = $this->graph(SodiumSigner::fromSeed(str_repeat("\x01", 32), 'k1'))->verifier()->verify()->breaks;
+
+        self::assertCount(1, $breaks);
+        self::assertStringContainsString('"products" is at version 1', $breaks[0]);
+        self::assertStringContainsString('its last receipt attests', $breaks[0]);
+    }
+
     public function testWithoutASignerTheLifecycleRunsAndIssuesNoReceipts(): void
     {
         $graph = $this->graph(null);
@@ -122,7 +135,7 @@ final class PlannerReceiptTest extends TestCase
     {
         return Orion::create(new Config(
             storage: $this->storage,
-            engines: new EngineRegistry(memory: $this->engine = new InMemoryEngine()),
+            engines: new EngineRegistry(memory: $this->engine ??= new InMemoryEngine()),
             tenancy: Tenancy::single(),
             clock: new FixedClock(new DateTimeImmutable('2026-10-26 12:00:00+00:00')),
             receiptSigner: $signer,
