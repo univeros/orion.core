@@ -21,6 +21,7 @@ use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistration;
 use Orion\Registry\IndexRegistry;
 use Orion\Schema\IndexSchema;
+use Orion\Storage\DuplicateKey;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
@@ -88,7 +89,10 @@ final readonly class Reindexer
             $job = $this->replay($job, $batch);
             $this->storage->transaction(function () use ($job): void {
                 $this->hold($job);
-                $this->aliases->swap($this->engine, $job->alias, $job->physical);
+                // A run resumed after the swap committed keeps the swap's time, which the prune grace window counts from.
+                if ($this->aliases->current($job->alias)?->physical->equals($job->physical) !== true) {
+                    $this->aliases->swap($this->engine, $job->alias, $job->physical);
+                }
             });
             $job = $this->replay($job, $batch);
             $receipt = $this->storage->transaction(function () use ($job, $target): ?Receipt {
@@ -105,13 +109,29 @@ final readonly class Reindexer
     }
 
     /**
-     * The reindex in progress for the alias, or null.
+     * The reindex in progress for the alias, or null. The job row is checked against the registry: it must build a
+     * version of this alias no older than the one the alias points at, registered on the job's engine, so a corrupted
+     * or forged row cannot steer an abort or a replay onto another index.
+     *
+     * @throws LogicException when the row disagrees with the registry
      */
     public function pending(IndexName $alias): ?ReindexJob
     {
         $row = $this->storage->findOne(Schema::REINDEX, ['alias' => $alias->value]);
+        if ($row === null) {
+            return null;
+        }
+        $job = ReindexJob::fromRow($row);
+        $registration = $this->registry->find($job->physical);
+        $current = $this->aliases->current($alias);
+        if (
+            ($registration !== null && ($registration->engine !== $job->engine || !$registration->alias->equals($alias)))
+            || ($current !== null && (IndexNamer::versionOf($alias, $job->physical) ?? 0) < $current->version)
+        ) {
+            throw new LogicException(sprintf('The reindex of %s names %s, which the registry does not record as a version it may build; the row was altered.', Assert::show($alias->value), Assert::show($job->physical->value)));
+        }
 
-        return $row === null ? null : ReindexJob::fromRow($row);
+        return $job;
     }
 
     /**
@@ -132,11 +152,16 @@ final readonly class Reindexer
         if ($this->aliases->current($alias)?->physical->equals($job->physical) === true) {
             throw new LogicException(sprintf('%s already points at %s; run the reindex again to finish it.', Assert::show($alias->value), Assert::show($job->physical->value)));
         }
+        // Claim the job first: a run that took it over meanwhile wins, and nothing is dropped.
+        $claim = $job->heldBy('abort-' . Uuid::v7()->toRfc4122(), $this->clock->now()->modify(sprintf('+%d seconds', $this->leaseSeconds)));
+        if ($this->storage->update(Schema::REINDEX, ['alias' => $alias->value, 'holder' => $job->holder], $claim->toRow()) === 0) {
+            throw new LogicException(sprintf('Another run took over the reindex of %s; it was not aborted.', Assert::show($alias->value)));
+        }
         $registration = $this->registry->find($job->physical);
         $this->engines->get($job->engine)->drop($job->physical);
-        $this->storage->transaction(function () use ($job): void {
-            $this->registry->forget($job->physical);
-            $this->storage->delete(Schema::REINDEX, ['alias' => $job->alias->value, 'holder' => $job->holder]);
+        $this->storage->transaction(function () use ($claim): void {
+            $this->registry->forget($claim->physical);
+            $this->finish($claim);
         });
 
         return $registration;
@@ -167,7 +192,10 @@ final readonly class Reindexer
     }
 
     /**
-     * Drops the {@see prunable()} versions from the engine and the registry, receipting each drop.
+     * Drops the {@see prunable()} versions from the engine and the registry, receipting each drop. Each version is
+     * re-checked inside the transaction that drops it, after the receipt lock: the alias first, so a swap that has
+     * committed is seen, then the job, so a version being built is seen. A version that is neither can never become
+     * current again, because swaps only move to newly claimed versions.
      *
      * @return list<IndexRegistration> the versions dropped
      */
@@ -175,12 +203,21 @@ final readonly class Reindexer
     {
         $dropped = [];
         foreach ($this->prunable($alias, $graceSeconds) as $version) {
-            $this->adapter()->drop($version->physical);
-            $this->storage->transaction(function () use ($version): void {
-                $this->registry->forget($version->physical);
-                $head = $this->outbox->head($version->alias);
-                $this->receipts?->append(Operation::Dropped, $version, null, 0, $head, $head);
-            });
+            try {
+                $this->storage->transaction(function () use ($version): void {
+                    $this->receipts?->appendAtHead(Operation::Dropped, $version, null, 0, fn(): int => $this->outbox->head($version->alias));
+                    $current = $this->aliases->current($version->alias);
+                    $building = $this->pending($version->alias)?->physical;
+                    if ($current === null || $current->physical->equals($version->physical) || $building?->equals($version->physical) === true || !$this->registry->forget($version->physical)) {
+                        throw new Skipped();
+                    }
+                    // Inside the transaction: if the commit fails, the version is still registered and the next prune
+                    // drops it again, rather than leaving an index nothing knows about.
+                    $this->adapter()->drop($version->physical);
+                });
+            } catch (Skipped) {
+                continue;
+            }
             $dropped[] = $version;
         }
 
@@ -211,11 +248,8 @@ final readonly class Reindexer
                 $this->storage->insert(Schema::REINDEX, $job->toRow());
                 $this->registry->register(new IndexRegistration($job->physical, $job->alias, $this->engine, $version, $desired->named($job->alias), $now));
             });
-        } catch (Throwable $raced) {
-            if ($this->pending($alias) !== null) {
-                throw new LogicException(sprintf('A reindex of %s is in progress.', Assert::show($alias->value)), 0, $raced);
-            }
-            throw $raced;
+        } catch (DuplicateKey $raced) {
+            throw new LogicException(sprintf('A reindex of %s is in progress.', Assert::show($alias->value)), 0, $raced);
         }
 
         return $job;

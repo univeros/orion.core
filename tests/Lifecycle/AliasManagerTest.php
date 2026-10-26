@@ -15,6 +15,7 @@ use Orion\Registry\IndexRegistration;
 use Orion\Registry\IndexRegistry;
 use Orion\Schema\IndexSchema;
 use Orion\Storage\Schema;
+use Orion\Testing\AliasingEngine;
 use Orion\Testing\FixedClock;
 use Orion\Testing\InMemoryStorage;
 use PHPUnit\Framework\TestCase;
@@ -23,14 +24,14 @@ use RuntimeException;
 final class AliasManagerTest extends TestCase
 {
     private InMemoryStorage $storage;
-    private AliasFakeEngine $native;
+    private AliasingEngine $native;
     private IndexRegistry $registry;
     private AliasManager $aliases;
 
     protected function setUp(): void
     {
         $this->storage = new InMemoryStorage();
-        $this->native = new AliasFakeEngine();
+        $this->native = new AliasingEngine();
         $this->registry = new IndexRegistry($this->storage);
         $this->aliases = new AliasManager($this->storage, new EngineRegistry(native: $this->native, emulated: new InMemoryEngine()), $this->registry, new FixedClock(new DateTimeImmutable('2026-10-26 10:00:00')));
         foreach ([['native', 'products', 1], ['native', 'products', 2], ['emulated', 'orders', 4], ['emulated', 'products', 3]] as [$engine, $alias, $version]) {

@@ -9,6 +9,9 @@ use Orion\Support\Assert;
 
 use function preg_match;
 use function sprintf;
+use function str_starts_with;
+use function strlen;
+use function substr;
 
 /**
  * Physical indices carry a version suffix; the application only ever talks to the alias (v1 §8.2).
@@ -21,6 +24,19 @@ final class IndexNamer
     public static function physical(IndexName $alias, int $version): IndexName
     {
         return IndexName::of(sprintf(self::FORMAT, $alias->value, Assert::positive($version, 'An index version')));
+    }
+
+    /**
+     * The version a physical index is of the alias, or null when it is not one of the alias's versions.
+     */
+    public static function versionOf(IndexName $alias, IndexName $physical): ?int
+    {
+        $prefix = $alias->value . '_v';
+        if (!str_starts_with($physical->value, $prefix) || preg_match('/^[1-9][0-9]{0,8}\z/', substr($physical->value, strlen($prefix))) !== 1) {
+            return null;
+        }
+
+        return (int) substr($physical->value, strlen($prefix));
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Orion\Outbox;
 
 use Orion\IndexName;
 use Orion\Lifecycle\AliasManager;
+use Orion\Storage\Condition;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
@@ -13,6 +14,7 @@ use Orion\Support\Row;
 use Psr\Clock\ClockInterface;
 
 use function array_map;
+use function max;
 
 /**
  * Outbox entries the engine refused, one letter per entry, for retry (v1 §10). A letter is cleared when its entry
@@ -47,14 +49,15 @@ final readonly class DeadLetters
     }
 
     /**
-     * Drops the letters of documents whose latest entry is now in the index.
+     * Drops the letters of documents written up to offset `$upTo`. A letter above it belongs to a newer entry that a
+     * concurrent drain sent and the engine refused; writing an older entry of the same document does not settle it.
      *
      * @param list<string> $documentIds
      */
-    public function clear(IndexName $index, array $documentIds): void
+    public function clear(IndexName $index, array $documentIds, int $upTo): void
     {
         if ($documentIds !== []) {
-            $this->storage->delete(Schema::DEAD_LETTER, ['index_name' => $index->value, 'document_id' => $documentIds]);
+            $this->storage->delete(Schema::DEAD_LETTER, ['index_name' => $index->value, 'document_id' => $documentIds, 'outbox_offset' => Condition::lte($upTo)]);
         }
     }
 
@@ -96,11 +99,11 @@ final readonly class DeadLetters
             return new Retried($index, 0, 0, 0, $superseded);
         }
         $delivered = $this->delivery->send($current->engine, $this->aliases->targetOf($current), $entries);
-        $this->storage->transaction(function () use ($index, $delivered): void {
+        $this->storage->transaction(function () use ($index, $delivered, $entries): void {
             foreach ($delivered->failures as $failure) {
                 $this->record($failure['entry'], $failure['error']);
             }
-            $this->clear($index, $delivered->settled);
+            $this->clear($index, $delivered->settled, max(array_map(static fn(Entry $entry): int => $entry->offset, $entries)));
         });
 
         return new Retried($index, $delivered->applied, $delivered->stale, \count($delivered->failures), $superseded);

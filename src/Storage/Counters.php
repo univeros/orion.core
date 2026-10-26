@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Orion\Storage;
 
 use Orion\Support\Row;
-use Throwable;
 
 /**
  * Named integers in `orion_counter`: sequences handed out in commit order ({@see next()}) and cursors that only move
@@ -32,7 +31,7 @@ final readonly class Counters
             $this->storage->transaction(fn() => $this->storage->insert(Schema::COUNTER, [...$criteria, 'value' => 1]));
 
             return 1;
-        } catch (Throwable $raced) {
+        } catch (DuplicateKey $raced) {
             // Another caller created the row first; once it commits, the increment takes the next value from it.
             return $this->storage->increment(Schema::COUNTER, $criteria, 'value') ?? throw $raced;
         }
@@ -62,7 +61,7 @@ final readonly class Counters
         }
         try {
             $this->storage->transaction(fn() => $this->storage->insert(Schema::COUNTER, ['name' => $name, 'value' => $to]));
-        } catch (Throwable $raced) {
+        } catch (DuplicateKey $raced) {
             if ($this->storage->update(Schema::COUNTER, ['name' => $name, 'value' => Condition::lt($to)], ['value' => $to]) === 0 && $this->value($name) < $to) {
                 throw $raced;
             }

@@ -16,8 +16,10 @@ use Orion\Registry\EngineRegistry;
 use Orion\Schema\IndexSchema;
 use Orion\Storage\Schema;
 use Orion\Tenancy\Tenancy;
+use Orion\Testing\AliasingEngine;
 use Orion\Testing\EngineKilled;
 use Orion\Testing\FaultyEngine;
+use Orion\Testing\FaultyStorage;
 use Orion\Testing\InMemoryStorage;
 use Orion\Testing\SettableClock;
 use Orion\Tests\Support\RecordingMetrics;
@@ -31,7 +33,7 @@ use function str_repeat;
 
 final class ReindexerTest extends TestCase
 {
-    private InMemoryStorage $storage;
+    private FaultyStorage $storage;
     private FaultyEngine $memory;
     private FaultyEngine $native;
     private SettableClock $clock;
@@ -41,12 +43,12 @@ final class ReindexerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->storage = new InMemoryStorage();
+        $this->storage = new FaultyStorage(new InMemoryStorage());
         $this->graph = Orion::create(new Config(
             storage: $this->storage,
             engines: new EngineRegistry(
                 memory: $this->memory = new FaultyEngine(new InMemoryEngine()),
-                native: $this->native = new FaultyEngine(new AliasFakeEngine()),
+                native: $this->native = new FaultyEngine(new AliasingEngine()),
             ),
             tenancy: Tenancy::single(),
             clock: $this->clock = new SettableClock(new DateTimeImmutable('2026-10-26 12:00:00+00:00')),
@@ -222,6 +224,67 @@ final class ReindexerTest extends TestCase
         $this->graph->reindexer('memory')->abort($this->products);
     }
 
+    public function testAnAbortRacingATakeoverLeavesTheTakersVersionAlone(): void
+    {
+        $this->seed('memory', 1);
+        $this->crashedReindex(self::rebuilt(), leaseSecondsLeft: -1);
+        $this->storage->beforeNextWrite(Schema::REINDEX, function (): void {
+            $this->storage->update(Schema::REINDEX, ['alias' => 'products'], ['holder' => 'taker', 'lease_until' => $this->clock->now()->modify('+5 minutes')]);
+        });
+
+        try {
+            $this->graph->reindexer('memory')->abort($this->products);
+            self::fail('The abort dropped a version another run had taken over.');
+        } catch (LogicException $e) {
+            self::assertStringContainsString('took over', $e->getMessage());
+        }
+
+        self::assertNotNull($this->memory->inspect(IndexName::of('products_v2')));
+        self::assertNotNull($this->graph->registry()->find(IndexName::of('products_v2')));
+        self::assertSame('taker', $this->graph->reindexer('memory')->pending($this->products)?->holder);
+    }
+
+    public function testAJobRowNamingAnotherAliasesIndexIsRefused(): void
+    {
+        $this->seed('memory', 1);
+        $this->graph->planner('memory')->apply(IndexSchema::for('orders')->keyword('status'));
+        $this->storage->insert(Schema::REINDEX, ['alias' => 'products', 'engine' => 'memory', 'physical' => 'orders_v1', 'from_version' => 1, 'position' => 0, 'documents' => 0, 'holder' => 'forged', 'lease_until' => $this->clock->now()->modify('-1 minute'), 'started_at' => $this->clock->now()]);
+
+        foreach ([fn() => $this->graph->reindexer('memory')->abort($this->products), fn() => $this->graph->reindexer('memory')->reindex(self::rebuilt())] as $attempt) {
+            try {
+                $attempt();
+                self::fail('A forged job row was acted on.');
+            } catch (\InvalidArgumentException | LogicException) {
+                self::addToAssertionCount(1);
+            }
+        }
+
+        self::assertNotNull($this->memory->inspect(IndexName::of('orders_v1')));
+        self::assertNotNull($this->graph->registry()->find(IndexName::of('orders_v1')));
+    }
+
+    public function testAJobRowNamingAVersionOlderThanTheLiveOneIsRefused(): void
+    {
+        $this->seed('memory', 1);
+        $this->graph->reindexer('memory')->reindex(self::rebuilt());
+        $this->storage->insert(Schema::REINDEX, ['alias' => 'products', 'engine' => 'memory', 'physical' => 'products_v1', 'from_version' => 2, 'position' => 0, 'documents' => 0, 'holder' => 'forged', 'lease_until' => $this->clock->now()->modify('-1 minute'), 'started_at' => $this->clock->now()]);
+
+        $this->expectException(LogicException::class);
+
+        $this->graph->reindexer('memory')->abort($this->products);
+    }
+
+    public function testAJobRowWhoseEngineDisagreesWithItsRegistrationIsRefused(): void
+    {
+        $this->seed('memory', 1);
+        $job = $this->crashedReindex(self::rebuilt(), leaseSecondsLeft: -1);
+        $this->storage->update(Schema::REINDEX, ['alias' => 'products'], ['engine' => 'native']);
+
+        $this->expectException(LogicException::class);
+
+        $this->graph->reindexer('memory')->pending($job->alias);
+    }
+
     public function testApplyIsRefusedWhileAReindexIsPending(): void
     {
         $this->seed('memory', 1);
@@ -300,6 +363,59 @@ final class ReindexerTest extends TestCase
         self::assertSame([Operation::Dropped, 1], [$receipt?->operation, $receipt?->toVersion]);
         self::assertSame([], $this->graph->reindexer('memory')->prune($this->products, graceSeconds: 300));
         self::assertTrue($this->graph->verifier()->verify()->ok());
+    }
+
+    public function testPruneRechecksAVersionThatBecameCurrentBeforeItsDrop(): void
+    {
+        $this->seed('memory', 1);
+        $this->crashedReindex(self::rebuilt(), leaseSecondsLeft: 60);
+        // The reindex finishes between prune's listing and its drop: the alias moves to version 2 and the job goes.
+        $this->storage->delete(Schema::REINDEX, ['alias' => 'products']);
+        $this->clock->advance('+1 hour');
+        self::assertSame(['products_v2'], array_map(static fn($r): string => $r->physical->value, $this->graph->reindexer('memory')->prunable($this->products, graceSeconds: 0)));
+        $this->storage->beforeNextWrite(Schema::COUNTER, function (): void {
+            $this->graph->aliases()->swap('memory', $this->products, IndexName::of('products_v2'));
+        });
+
+        self::assertSame([], $this->graph->reindexer('memory')->prune($this->products, graceSeconds: 0));
+        self::assertNotNull($this->memory->inspect(IndexName::of('products_v2')));
+        self::assertSame(0, $this->storage->count(Schema::RECEIPT, ['operation' => 'dropped']));
+    }
+
+    public function testAResumedReindexWhoseSwapHadCommittedKeepsTheSwapTime(): void
+    {
+        $this->seed('memory', 1);
+        $this->storage->killAfterCommit(Schema::ALIAS);
+        try {
+            $this->graph->reindexer('memory')->reindex(self::rebuilt());
+            self::fail('The reindex survived the fault.');
+        } catch (\Orion\Testing\StorageKilled) {
+        }
+        $swappedAt = $this->graph->aliases()->swappedAt($this->products);
+        $this->clock->advance('+10 minutes');
+
+        $this->graph->reindexer('memory')->reindex(self::rebuilt());
+
+        self::assertEquals($swappedAt, $this->graph->aliases()->swappedAt($this->products));
+        self::assertSame(1, $this->storage->count(Schema::RECEIPT, ['operation' => 'reindexed']));
+    }
+
+    public function testAnApplyThatMeetsAReindexClaimedMeanwhileIsRolledBack(): void
+    {
+        $this->seed('memory', 1);
+        $this->memory->beforeNext(FaultyEngine::APPLY, function (): void {
+            $this->crashedReindex(self::rebuilt(), leaseSecondsLeft: 60);
+        });
+
+        try {
+            $this->graph->planner('memory')->apply(self::schema()->keyword('sku'));
+            self::fail('An apply was recorded beside a pending reindex.');
+        } catch (LogicException $e) {
+            self::assertStringContainsString('reindex', $e->getMessage());
+        }
+
+        self::assertSame(self::schema()->hash(), $this->graph->registry()->find(IndexName::of('products_v1'))?->schema->hash());
+        self::assertSame(0, $this->storage->count(Schema::RECEIPT, ['operation' => 'applied']));
     }
 
     public function testPruneKeepsTheVersionBeingBuilt(): void

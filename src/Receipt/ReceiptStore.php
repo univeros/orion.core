@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Orion\Receipt;
 
+use Closure;
 use LogicException;
 use Orion\IndexName;
 use Orion\Lifecycle\Operation;
@@ -36,16 +37,44 @@ final readonly class ReceiptStore
     }
 
     /**
+     * Appends the receipt. Call it first in the transaction that records the operation: it takes the sequence lock and
+     * then reads the receipt before it, and under MySQL's repeatable read an earlier read in the same transaction would
+     * fix a snapshot in which a receipt committed meanwhile is missing.
+     *
      * @throws LogicException without a signer, or when the receipt before it is missing (the chain is broken: verify it)
      */
     public function append(Operation $operation, IndexRegistration $to, ?int $fromVersion, int $documentCount, int $fromOffset, int $toOffset): Receipt
     {
+        return $this->issue($operation, $to, $fromVersion, $documentCount, static fn(): array => [$fromOffset, $toOffset]);
+    }
+
+    /**
+     * {@see append()} for an operation at an outbox position: `$head` is read after the sequence lock is taken, so the
+     * receipt's offsets come from the same snapshot as the chain.
+     *
+     * @param Closure(): int $head
+     */
+    public function appendAtHead(Operation $operation, IndexRegistration $to, ?int $fromVersion, int $documentCount, Closure $head): Receipt
+    {
+        return $this->issue($operation, $to, $fromVersion, $documentCount, static function () use ($head): array {
+            $offset = $head();
+
+            return [$offset, $offset];
+        });
+    }
+
+    /**
+     * @param Closure(): array{int, int} $offsets
+     */
+    private function issue(Operation $operation, IndexRegistration $to, ?int $fromVersion, int $documentCount, Closure $offsets): Receipt
+    {
         $signer = $this->signer ?? throw new LogicException('Receipts are signed: pass a ReceiptSigner in the Config.');
 
-        return $this->storage->transaction(function () use ($signer, $operation, $to, $fromVersion, $documentCount, $fromOffset, $toOffset): Receipt {
+        return $this->storage->transaction(function () use ($signer, $operation, $to, $fromVersion, $documentCount, $offsets): Receipt {
             $sequence = $this->counters->next(self::SEQUENCE);
             $previous = $sequence === 1 ? null : ($this->find($sequence - 1)
                 ?? throw new LogicException(sprintf('Receipt %d is missing, so the chain cannot be extended; run orion verify.', $sequence - 1)));
+            [$fromOffset, $toOffset] = $offsets();
             $receipt = Receipt::issue($sequence, $operation, $to, $fromVersion, $documentCount, $fromOffset, $toOffset, $previous?->hash, $this->clock->now(), $signer);
             $this->storage->insert(Schema::RECEIPT, $receipt->toRow());
 

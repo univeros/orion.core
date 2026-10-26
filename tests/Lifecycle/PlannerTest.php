@@ -15,6 +15,7 @@ use Orion\Registry\IndexRegistration;
 use Orion\Schema\IndexSchema;
 use Orion\Storage\Schema;
 use Orion\Tenancy\Tenancy;
+use Orion\Testing\AliasingEngine;
 use Orion\Testing\FixedClock;
 use Orion\Testing\InMemoryStorage;
 use Orion\Wiring\Config;
@@ -28,7 +29,7 @@ use RuntimeException;
 final class PlannerTest extends TestCase
 {
     private InMemoryStorage $storage;
-    private AliasFakeEngine $native;
+    private AliasingEngine $native;
     private RecordingLogger $logger;
     private Graph $graph;
 
@@ -37,7 +38,7 @@ final class PlannerTest extends TestCase
         $this->storage = new InMemoryStorage();
         $this->graph = Orion::create(new Config(
             storage: $this->storage,
-            engines: new EngineRegistry(memory: new InMemoryEngine(), native: $this->native = new AliasFakeEngine()),
+            engines: new EngineRegistry(memory: new InMemoryEngine(), native: $this->native = new AliasingEngine()),
             tenancy: Tenancy::single(),
             clock: new FixedClock(new DateTimeImmutable('2026-10-26 12:00:00')),
             logger: $this->logger = new RecordingLogger(),

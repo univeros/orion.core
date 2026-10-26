@@ -83,9 +83,7 @@ final readonly class Planner
         if ($current === null) {
             return $this->create($desired);
         }
-        if ($this->storage->findOne(Schema::REINDEX, ['alias' => $current->alias->value]) !== null) {
-            throw new LogicException(sprintf('A reindex of %s is pending; apply once it completes, or abort it.', Assert::show($current->alias->value)));
-        }
+        $this->refuseWhileReindexing($current->alias);
         $plan = MigrationPlan::between($desired, $this->live($current), $current->schema);
         if ($plan->requiresReindex()) {
             return new Outcome(Operation::ReindexRequired, $current, $plan);
@@ -106,11 +104,14 @@ final readonly class Planner
         }
         $next = $redeclared ? new IndexRegistration($current->physical, $current->alias, $current->engine, $current->version, $desired, $current->createdAt) : $current;
         $receipt = $this->storage->transaction(function () use ($redeclared, $next, $current): ?Receipt {
+            $receipt = $this->receipt(Operation::Applied, $next, $current->version);
+            // Checked again where it counts: a reindex claimed since the first check builds from its own schema.
+            $this->refuseWhileReindexing($current->alias);
             if ($redeclared) {
                 $this->registry->update($next);
             }
 
-            return $this->receipt(Operation::Applied, $next, $current->version, 0);
+            return $receipt;
         });
 
         return new Outcome(Operation::Applied, $next, $plan, $receipt);
@@ -144,9 +145,10 @@ final readonly class Planner
         try {
             $adapter->ensure($desired->named($physical));
             $receipt = $this->storage->transaction(function () use ($alias, $physical, $registration): ?Receipt {
+                $receipt = $this->receipt(Operation::Created, $registration, null);
                 $this->aliases->swap($this->engine, $alias, $physical);
 
-                return $this->receipt(Operation::Created, $registration, null, 0);
+                return $receipt;
             });
         } catch (Throwable $failure) {
             $this->release($registration, $failure);
@@ -157,14 +159,22 @@ final readonly class Planner
     }
 
     /**
-     * The receipt for an operation that changed the index or its registration, at the outbox head it saw; null when
-     * receipts are off. Call it inside the transaction that records the change, so neither commits without the other.
+     * The receipt for an operation that changed the index or its registration, at the outbox head; null when receipts
+     * are off. Call it first inside the transaction that records the change, so neither commits without the other.
      */
-    private function receipt(Operation $operation, IndexRegistration $to, ?int $fromVersion, int $documents): ?Receipt
+    private function receipt(Operation $operation, IndexRegistration $to, ?int $fromVersion): ?Receipt
     {
-        $head = $this->outbox->head($to->alias);
+        return $this->receipts?->appendAtHead($operation, $to, $fromVersion, 0, fn(): int => $this->outbox->head($to->alias));
+    }
 
-        return $this->receipts?->append($operation, $to, $fromVersion, $documents, $head, $head);
+    /**
+     * @throws LogicException while a reindex of the alias is pending: an in-place change would not reach the new version
+     */
+    private function refuseWhileReindexing(IndexName $alias): void
+    {
+        if ($this->storage->findOne(Schema::REINDEX, ['alias' => $alias->value]) !== null) {
+            throw new LogicException(sprintf('A reindex of %s is pending; apply once it completes, or abort it.', Assert::show($alias->value)));
+        }
     }
 
     /**

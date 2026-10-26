@@ -56,11 +56,12 @@ final readonly class Drain
             // Everything up to the head had committed before this read, so a short batch leaves nothing behind it.
             $to = count($entries) < $batch ? max($head, self::last($entries, $cursor)) : self::last($entries, $cursor);
             $delivered = $entries === [] ? new Delivered(0, 0, [], []) : $this->deliver($index, $entries);
-            $this->storage->transaction(function () use ($index, $delivered, $to): void {
+            $written = self::last($entries, $cursor);
+            $this->storage->transaction(function () use ($index, $delivered, $to, $written): void {
                 foreach ($delivered->failures as $failure) {
                     $this->deadLetters->record($failure['entry'], $failure['error']);
                 }
-                $this->deadLetters->clear($index, $delivered->settled);
+                $this->deadLetters->clear($index, $delivered->settled, $written);
                 $this->counters->advance(self::CURSOR . $index->value, $to);
             });
             $cursor = $to;

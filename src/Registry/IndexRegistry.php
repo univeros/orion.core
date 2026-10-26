@@ -6,6 +6,7 @@ namespace Orion\Registry;
 
 use LogicException;
 use Orion\IndexName;
+use Orion\Storage\DuplicateKey;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
@@ -34,7 +35,11 @@ final readonly class IndexRegistry
         if ($this->find($registration->physical) !== null) {
             throw new LogicException(sprintf('%s is already registered.', Assert::show($registration->physical->value)));
         }
-        $this->storage->insert(Schema::INDEX, $registration->toRow());
+        try {
+            $this->storage->insert(Schema::INDEX, $registration->toRow());
+        } catch (DuplicateKey $raced) {
+            throw new LogicException(sprintf('%s is already registered.', Assert::show($registration->physical->value)), 0, $raced);
+        }
     }
 
     /**
@@ -72,8 +77,11 @@ final readonly class IndexRegistry
         return $versions === [] ? 1 : max(array_map(static fn(IndexRegistration $r): int => $r->version, $versions)) + 1;
     }
 
-    public function forget(IndexName $physical): void
+    /**
+     * @return bool whether the physical index was registered
+     */
+    public function forget(IndexName $physical): bool
     {
-        $this->storage->delete(Schema::INDEX, ['name' => $physical->value]);
+        return $this->storage->delete(Schema::INDEX, ['name' => $physical->value]) > 0;
     }
 }

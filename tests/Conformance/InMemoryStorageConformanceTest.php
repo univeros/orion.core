@@ -15,7 +15,7 @@ final class InMemoryStorageConformanceTest extends StorageConformanceTestCase
 
     protected function createStorage(): Storage
     {
-        return $this->host = new InMemoryStorage();
+        return $this->host = new InMemoryStorage(self::tables());
     }
 
     protected function insertOnHostConnection(string $table, array $row): void

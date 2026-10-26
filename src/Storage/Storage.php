@@ -36,6 +36,7 @@ interface Storage
 
     /**
      * @param array<string, mixed> $row
+     * @throws DuplicateKey when the row repeats a primary or unique key
      */
     public function insert(string $table, array $row): void;
 

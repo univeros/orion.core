@@ -12,6 +12,7 @@ use Orion\Support\Assert;
 use Orion\Support\Input;
 use Orion\Support\Row;
 
+use function sprintf;
 use function strlen;
 
 /**
@@ -38,6 +39,9 @@ final readonly class ReindexJob
         public DateTimeImmutable $startedAt,
     ) {
         Assert::notEmpty($engine, 'A reindex engine');
+        if (IndexNamer::versionOf($alias, $physical) === null) {
+            throw new InvalidArgumentException(sprintf('A reindex of %s builds one of its versions, not %s.', Assert::show($alias->value), Assert::show($physical->value)));
+        }
         Assert::positive($fromVersion, 'A reindex from_version');
         Assert::notEmpty($holder, 'A reindex holder');
         Assert::atMost(strlen($holder), self::MAX_HOLDER_BYTES, 'A reindex holder');

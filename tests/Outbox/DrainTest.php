@@ -18,7 +18,7 @@ use Orion\Testing\EngineKilled;
 use Orion\Testing\FaultyEngine;
 use Orion\Testing\InMemoryStorage;
 use Orion\Testing\SettableClock;
-use Orion\Tests\Lifecycle\AliasFakeEngine;
+use Orion\Testing\AliasingEngine;
 use Orion\Tests\Support\RecordingMetrics;
 use Orion\Wiring\Config;
 use Orion\Wiring\Graph;
@@ -43,7 +43,7 @@ final class DrainTest extends TestCase
         $this->engine = new FaultyEngine(new InMemoryEngine());
         $this->graph = Orion::create(new Config(
             storage: $this->storage,
-            engines: new EngineRegistry(memory: $this->engine, native: new AliasFakeEngine()),
+            engines: new EngineRegistry(memory: $this->engine, native: new AliasingEngine()),
             tenancy: Tenancy::single(),
             clock: $this->clock = new SettableClock(new DateTimeImmutable('2026-10-26 12:00:00+00:00')),
             metrics: $this->metrics = new RecordingMetrics(),
@@ -178,6 +178,22 @@ final class DrainTest extends TestCase
 
         self::assertSame([], $this->graph->deadLetters()->of($this->products));
         self::assertSame(0, $this->graph->deadLetters()->count());
+    }
+
+    public function testAnOlderEntryWrittenByAConcurrentDrainKeepsTheDeadLetterOfTheNewerOne(): void
+    {
+        $this->build();
+        $this->graph->outbox()->index($this->products, 'p1', ['title' => 'Lamp']);
+        // Drain A has read p1 at offset 1; before it writes, p1 is rewritten with a field the index refuses and a second
+        // drain dead-letters that newer entry. A then writes its older p1 and must not clear the newer letter.
+        $this->engine->beforeNext(FaultyEngine::INDEX, function (): void {
+            $this->graph->outbox()->index($this->products, 'p1', ['title' => 'Lamp', 'colour' => 'red']);
+            $this->graph->drain()->run($this->products);
+        });
+
+        $this->graph->drain()->run($this->products);
+
+        self::assertSame([2], array_map(static fn(DeadLetter $l): int => $l->offset, $this->graph->deadLetters()->of($this->products)));
     }
 
     public function testRetryingADeadLetterWhoseEntryWasCompactedAwayForgetsIt(): void
