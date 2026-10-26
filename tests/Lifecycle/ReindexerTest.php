@@ -289,6 +289,8 @@ final class ReindexerTest extends TestCase
 
         self::assertSame([], $this->graph->reindexer('memory')->prune($this->products, graceSeconds: 300));
         $this->clock->advance('+301 seconds');
+        self::assertSame(['products_v1'], array_map(static fn($r): string => $r->physical->value, $this->graph->reindexer('memory')->prunable($this->products, graceSeconds: 300)));
+        self::assertNotNull($this->memory->inspect(IndexName::of('products_v1')), 'Listing what is prunable drops nothing.');
         $dropped = $this->graph->reindexer('memory')->prune($this->products, graceSeconds: 300);
 
         self::assertSame(['products_v1'], array_map(static fn($r): string => $r->physical->value, $dropped));

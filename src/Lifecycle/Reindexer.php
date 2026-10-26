@@ -143,12 +143,12 @@ final readonly class Reindexer
     }
 
     /**
-     * Drops every version the alias no longer points at, once `$graceSeconds` have passed since its last swap; the
-     * version a pending reindex is building is kept. Each drop is receipted.
+     * The versions {@see prune()} would drop now: every version the alias no longer points at, once `$graceSeconds`
+     * have passed since its last swap, except the version a pending reindex is building.
      *
-     * @return list<IndexRegistration> the versions dropped
+     * @return list<IndexRegistration>
      */
-    public function prune(IndexName $alias, int $graceSeconds): array
+    public function prunable(IndexName $alias, int $graceSeconds): array
     {
         $current = $this->current($alias);
         $swappedAt = $this->aliases->swappedAt($alias);
@@ -156,11 +156,25 @@ final readonly class Reindexer
             return [];
         }
         $building = $this->pending($alias)?->physical;
-        $dropped = [];
+        $prunable = [];
         foreach ($this->registry->versions($alias) as $version) {
-            if ($version->physical->equals($current->physical) || ($building !== null && $version->physical->equals($building))) {
-                continue;
+            if (!$version->physical->equals($current->physical) && ($building === null || !$version->physical->equals($building))) {
+                $prunable[] = $version;
             }
+        }
+
+        return $prunable;
+    }
+
+    /**
+     * Drops the {@see prunable()} versions from the engine and the registry, receipting each drop.
+     *
+     * @return list<IndexRegistration> the versions dropped
+     */
+    public function prune(IndexName $alias, int $graceSeconds): array
+    {
+        $dropped = [];
+        foreach ($this->prunable($alias, $graceSeconds) as $version) {
             $this->adapter()->drop($version->physical);
             $this->storage->transaction(function () use ($version): void {
                 $this->registry->forget($version->physical);

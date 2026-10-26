@@ -56,6 +56,22 @@ final class CheckImportsTest extends TestCase
         self::assertSame(0, $status);
     }
 
+    public function testTheConsoleStaysInTheCliAndHostPackages(): void
+    {
+        $root = sys_get_temp_dir() . '/orion-imports-' . uniqid();
+        $console = 'Symfony' . '\\Component' . '\\Console' . '\\Command' . '\\Command';
+        mkdir($root . '/packages/core/src', 0o777, true);
+        mkdir($root . '/packages/cli/src', 0o777, true);
+        file_put_contents($root . '/packages/cli/src/PlanCommand.php', "<?php\nuse " . $console . ";\n");
+        self::assertSame(0, self::check($root)[0]);
+
+        file_put_contents($root . '/packages/core/src/Leak.php', "<?php\nuse " . $console . ";\n");
+        [$status, $output] = self::check($root);
+
+        self::assertSame(1, $status, $output);
+        self::assertStringContainsString('packages/core/src/Leak.php', $output);
+    }
+
     /**
      * @return array{0: int, 1: string}
      */

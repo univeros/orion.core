@@ -67,6 +67,7 @@ final class OutboxTest extends TestCase
 
         $entries = $this->outbox->after($this->products, 0, 10);
 
+        self::assertSame(2, $this->outbox->size($this->products), 'A replay reads one entry per document.');
         self::assertSame([['p2', 2], ['p1', 3]], array_map(static fn(Entry $e): array => [$e->documentId, $e->offset], $entries));
         self::assertSame(['title' => 'Floor lamp'], $entries[1]->fields);
     }

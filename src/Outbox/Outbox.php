@@ -58,6 +58,14 @@ final readonly class Outbox
     }
 
     /**
+     * How many entries the index holds: one per document, what a full replay reads.
+     */
+    public function size(IndexName $index): int
+    {
+        return $this->storage->count(Schema::OUTBOX, ['index_name' => $index->value]);
+    }
+
+    /**
      * @return list<Entry> up to `$limit` entries after the offset, in offset order
      */
     public function after(IndexName $index, int $offset, int $limit): array

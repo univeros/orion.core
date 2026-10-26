@@ -75,6 +75,11 @@ final readonly class ReceiptStore
         return $this->counters->value(self::SEQUENCE);
     }
 
+    public function count(IndexName $index): int
+    {
+        return $this->storage->count(Schema::RECEIPT, ['index_name' => $index->value]);
+    }
+
     /**
      * @return list<Receipt> the index's receipts, newest first
      */

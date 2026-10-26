@@ -95,6 +95,8 @@ final class ReceiptStoreTest extends TestCase
         self::assertSame([1, 2, 3], array_map(static fn(Receipt $r): int => $r->sequence, iterator_to_array($this->store->walk(batch: 2), false)));
         self::assertSame(3, $this->store->latest()?->sequence);
         self::assertSame(3, $this->store->head());
+        self::assertSame(3, $this->store->count(IndexName::of('products')));
+        self::assertSame(0, $this->store->count(IndexName::of('orders')));
         self::assertSame([3], array_map(static fn(Receipt $r): int => $r->sequence, $this->store->of(IndexName::of('products'), limit: 1)));
     }
 
