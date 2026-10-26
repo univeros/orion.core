@@ -100,6 +100,41 @@ final class CheckImportsTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function evasions(): iterable
+    {
+        yield 'lowercase, as PHP allows' => ['packages/core/src/Leak.php', "<?php\nuse " . 'elastic' . '\\elasticsearch' . '\\ClientBuilder;' . "\n"];
+        yield 'a group use' => ['packages/core/src/Leak.php', "<?php\nuse " . 'Symfony' . '\\Component' . '\\{HttpKernel' . '\\Kernel};' . "\n"];
+        yield 'a console group use' => ['packages/core/src/Leak.php', "<?php\nuse " . 'Symfony' . '\\Component' . '\\{Console' . '\\Command' . '\\Command};' . "\n"];
+        yield 'outside src and tests' => ['packages/core/bin/tool.php', "<?php\nuse " . 'Elastic' . '\\Elasticsearch' . '\\ClientBuilder;' . "\n"];
+        yield 'a template' => ['packages/core/src/view.phtml', "<?php\nuse " . self::FRAMEWORK_CLASS . ";\n"];
+        yield 'an include' => ['examples/demo/config/app.inc', "<?php\nuse " . self::FRAMEWORK_CLASS . ";\n"];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('evasions')]
+    public function testANamespaceCannotSlipPastTheGate(string $file, string $code): void
+    {
+        $root = sys_get_temp_dir() . '/orion-imports-' . uniqid();
+        mkdir(dirname($root . '/' . $file), 0o777, true);
+        file_put_contents($root . '/' . $file, $code);
+
+        [$status, $output] = self::check($root);
+
+        self::assertSame(1, $status, $output);
+        self::assertStringContainsString($file, $output);
+    }
+
+    public function testDependenciesInstalledUnderAPackageAreNotScanned(): void
+    {
+        $root = sys_get_temp_dir() . '/orion-imports-' . uniqid();
+        mkdir($root . '/examples/demo/vendor/acme', 0o777, true);
+        file_put_contents($root . '/examples/demo/vendor/acme/Lib.php', "<?php\nuse " . self::FRAMEWORK_CLASS . ";\n");
+
+        self::assertSame(0, self::check($root)[0]);
+    }
+
+    /**
      * @return array{0: int, 1: string}
      */
     private static function check(string $root): array
