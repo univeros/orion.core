@@ -83,7 +83,7 @@ final readonly class Reindexer
     {
         Assert::positive($batch, 'A reindex batch');
         $this->scopes->assertFits($desired);
-        $this->current($desired->index);
+        $this->refuseOrgKeyChange($this->current($desired->index), $desired);
         $job = $this->claim($desired, Uuid::v7()->toRfc4122());
         try {
             $target = $this->registry->find($job->physical)
@@ -338,6 +338,22 @@ final readonly class Reindexer
     /**
      * @throws LogicException when the alias is not built, or another engine built it
      */
+    /**
+     * The outbox's documents carry the org key they were recorded under, or none: replayed under another key, no
+     * tenant's filter would find them. Only an index holding no documents may change it.
+     */
+    private function refuseOrgKeyChange(IndexRegistration $current, IndexSchema $desired): void
+    {
+        if ($current->schema->orgKey !== $desired->orgKey && $this->outbox->size($desired->index) > 0) {
+            throw new LogicException(sprintf(
+                '%s holds documents recorded under the org key %s, so it cannot change to %s: declare a new index with the org key and record every document again as its tenant.',
+                Assert::show($desired->index->value),
+                $current->schema->orgKey === null ? '(none)' : Assert::show($current->schema->orgKey),
+                $desired->orgKey === null ? '(none)' : Assert::show($desired->orgKey),
+            ));
+        }
+    }
+
     private function current(IndexName $alias): IndexRegistration
     {
         $current = $this->aliases->current($alias)

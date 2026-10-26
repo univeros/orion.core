@@ -4,20 +4,20 @@ declare(strict_types=1);
 
 namespace Orion\Tests\Outbox;
 
-use Orion\Wiring\Config;
-use Orion\Tenancy\Tenancy;
-use Orion\Registry\EngineRegistry;
-use Orion\Orion;
-use Orion\Adapter\InMemory\InMemoryEngine;
 use DateTimeImmutable;
 use InvalidArgumentException;
+use Orion\Adapter\InMemory\InMemoryEngine;
 use Orion\IndexName;
+use Orion\Orion;
 use Orion\Outbox\Entry;
 use Orion\Outbox\EntryKind;
 use Orion\Outbox\Outbox;
+use Orion\Registry\EngineRegistry;
 use Orion\Storage\Schema;
+use Orion\Tenancy\Tenancy;
 use Orion\Testing\FixedClock;
 use Orion\Testing\InMemoryStorage;
+use Orion\Wiring\Config;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;

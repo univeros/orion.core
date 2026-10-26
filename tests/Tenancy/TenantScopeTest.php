@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Orion\Tests\Tenancy;
 
 use InvalidArgumentException;
+use Orion\Outbox\Entry;
 use Orion\Tenancy\TenantScope;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 use function str_repeat;
+use function strlen;
 
 final class TenantScopeTest extends TestCase
 {
@@ -40,6 +42,18 @@ final class TenantScopeTest extends TestCase
         self::assertSame('0199a6f0-7c1e-7b8a-9f00-acme:p1', $acme->qualify('p1'));
         self::assertSame('p1', $acme->unqualify($acme->qualify('p1')));
         self::assertSame('a:b', $acme->unqualify($acme->qualify('a:b')), 'The id may hold the separator: the tenant cannot.');
+    }
+
+    public function testAQualifiedIdFitsTheOutboxOrIsRefusedNamingTheApplicationsId(): void
+    {
+        $tenant = new TenantScope(str_repeat('t', 100));
+        $room = Entry::MAX_ID_BYTES - 101;
+
+        self::assertSame(Entry::MAX_ID_BYTES, strlen($tenant->qualify(str_repeat('i', $room))));
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('at most ' . $room . ' bytes');
+
+        $tenant->qualify(str_repeat('i', $room + 1));
     }
 
     public function testAnIdAnotherTenantQualifiedIsNotThisTenants(): void

@@ -12,8 +12,12 @@ use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
+use ReflectionFunction;
+use ReflectionFunctionAbstract;
 use ReflectionMethod;
+use ReflectionIntersectionType;
 use ReflectionNamedType;
+use ReflectionUnionType;
 use SplFileInfo;
 
 use function class_exists;
@@ -73,11 +77,24 @@ final class NoUnscopedQueryPathTest extends TestCase
         self::assertTrue(self::takesAQuery(new ReflectionMethod(SearchAdapter::class, 'search')));
     }
 
-    private static function takesAQuery(ReflectionMethod $method): bool
+    public function testAQueryInAUnionOrNullableTypeCounts(): void
+    {
+        self::assertTrue(self::takesAQuery(new ReflectionFunction(static fn(Query|array $query): null => null)));
+        self::assertTrue(self::takesAQuery(new ReflectionFunction(static fn(?Query $query): null => null)));
+        self::assertFalse(self::takesAQuery(new ReflectionFunction(static fn(string $index): null => null)));
+    }
+
+    private static function takesAQuery(ReflectionFunctionAbstract $method): bool
     {
         foreach ($method->getParameters() as $parameter) {
             $type = $parameter->getType();
-            if ($parameter->getName() === 'native' || ($type instanceof ReflectionNamedType && $type->getName() === Query::class)) {
+            $named = $type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType ? $type->getTypes() : [$type];
+            foreach ($named as $one) {
+                if ($one instanceof ReflectionNamedType && $one->getName() === Query::class) {
+                    return true;
+                }
+            }
+            if ($parameter->getName() === 'native') {
                 return true;
             }
         }

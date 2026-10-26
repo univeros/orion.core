@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Orion\Tenancy;
 
 use InvalidArgumentException;
+use Orion\Outbox\Entry;
 use Orion\Support\Assert;
 
 use function preg_match;
@@ -32,10 +33,18 @@ final readonly class TenantScope
     }
 
     /**
-     * The engine id of this tenant's document.
+     * The engine id of this tenant's document. It must fit the outbox's id column, so the application's id has that
+     * much less room under a tenant.
+     *
+     * @throws InvalidArgumentException when the qualified id would not fit
      */
     public function qualify(string $id): string
     {
+        $room = Entry::MAX_ID_BYTES - strlen($this->tenant) - strlen(self::SEPARATOR);
+        if (strlen($id) > $room) {
+            throw new InvalidArgumentException(sprintf('Under the tenant %s a document id is at most %d bytes, %s is longer.', Assert::show($this->tenant), $room, Assert::show($id)));
+        }
+
         return $this->tenant . self::SEPARATOR . $id;
     }
 

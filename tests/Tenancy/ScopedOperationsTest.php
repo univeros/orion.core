@@ -14,6 +14,7 @@ use Orion\Query\Query;
 use Orion\Registry\EngineRegistry;
 use Orion\Schema\IndexSchema;
 use Orion\Storage\Schema;
+use Orion\Tenancy\NoTenant;
 use Orion\Tenancy\Tenancy;
 use Orion\Testing\InMemoryStorage;
 use Orion\Testing\SettableResolver;
@@ -121,12 +122,12 @@ final class ScopedOperationsTest extends TestCase
         try {
             $this->graph->searcher()->search(Query::on('products'));
             self::fail('A search ran without a tenant.');
-        } catch (LogicException) {
+        } catch (NoTenant) {
         }
         try {
             $this->graph->outbox()->index($this->products, 'p1', ['title' => 'Trail running shoe']);
             self::fail('A write was recorded without a tenant.');
-        } catch (LogicException) {
+        } catch (NoTenant) {
         }
 
         self::assertSame(0, $this->storage->count(Schema::OUTBOX, []));
@@ -154,6 +155,43 @@ final class ScopedOperationsTest extends TestCase
             }
         }
         self::assertSame([], $this->graph->registry()->versions($this->products));
+    }
+
+    public function testAnIndexHoldingDocumentsNeverChangesItsOrgKey(): void
+    {
+        // Entries recorded under the old key (or none) carry no tenant the new key could filter on: a replay would
+        // build an index whose documents no tenant can find.
+        $single = $this->graph(Tenancy::single());
+        $single->planner('memory')->apply(IndexSchema::for('products')->text('title'));
+        $single->outbox()->index($this->products, 'p1', ['title' => 'Trail running shoe']);
+
+        try {
+            $this->graph->reindexer('memory')->reindex($this->schema());
+            self::fail('Tenancy was added to an index holding untenanted documents.');
+        } catch (LogicException $refused) {
+            self::assertStringContainsString('org key', $refused->getMessage());
+        }
+        self::assertCount(1, $this->graph->registry()->versions($this->products));
+    }
+
+    public function testARenamedOrgKeyIsRefusedOnceDocumentsExist(): void
+    {
+        $this->build();
+        $this->write('acme', 'p1', 'Trail running shoe');
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('org key');
+
+        $this->graph->reindexer('memory')->reindex(IndexSchema::for('products')->text('title')->orgKey('tenant'));
+    }
+
+    public function testAnEmptyIndexMayChangeItsOrgKey(): void
+    {
+        $this->build();
+
+        $result = $this->graph->reindexer('memory')->reindex(IndexSchema::for('products')->text('title')->orgKey('tenant'));
+
+        self::assertSame('tenant', $result->to->schema->orgKey);
     }
 
     public function testSingleTenancyRefusesAnOrgKey(): void
