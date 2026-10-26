@@ -13,8 +13,14 @@ use function sprintf;
  */
 final class Schema
 {
-    /** The transactional write log, addressable by offset (v1 §10). Offset allocation is settled in WP4. */
+    /**
+     * The transactional write log (v1 §10), compacted to the latest write or delete of each document per index and
+     * addressable by offset per index. Offsets come from the `outbox:<index>` counter, so they are dense and committed
+     * in order.
+     */
     public const string OUTBOX = 'orion_outbox';
+    /** Named integers: the outbox head per index (`outbox:<index>`), each drain cursor (`drain:<index>`), the receipt sequence. */
+    public const string COUNTER = 'orion_counter';
     /** The index registry: one row per versioned physical index with the schema it was built from (v1 §8.2). */
     public const string INDEX = 'orion_index';
     /** Which physical index each alias points at, for every engine; the only indirection on engines without native aliases. */
@@ -27,7 +33,7 @@ final class Schema
      */
     public static function tables(): array
     {
-        return [self::outbox(), self::index(), self::alias(), self::receipt()];
+        return [self::outbox(), self::counter(), self::index(), self::alias(), self::receipt()];
     }
 
     public static function table(string $name): Table
@@ -44,16 +50,22 @@ final class Schema
     private static function outbox(): Table
     {
         return Table::named(self::OUTBOX, [
-            Column::string('id', 36)->primary(),
-            Column::int('outbox_offset'),
-            Column::string('index_name', 255),
+            Column::string('index_name', 255)->primary(),
+            Column::int('outbox_offset')->primary(),
             Column::string('document_id', 255),
             Column::string('operation', 16),
             Column::json('payload')->nullable(),
             Column::datetime('recorded_at'),
         ])
-            ->unique(['outbox_offset'])
-            ->index(['index_name', 'outbox_offset']);
+            ->unique(['index_name', 'document_id']);
+    }
+
+    private static function counter(): Table
+    {
+        return Table::named(self::COUNTER, [
+            Column::string('name', 300)->primary(),
+            Column::int('value'),
+        ]);
     }
 
     private static function index(): Table

@@ -17,11 +17,11 @@ use function str_repeat;
 
 final class SchemaTest extends TestCase
 {
-    public function testOrionOwnsFourTables(): void
+    public function testOrionOwnsItsTables(): void
     {
         $names = array_map(static fn(Table $table): string => $table->name, Schema::tables());
 
-        self::assertSame(['orion_outbox', 'orion_index', 'orion_alias', 'orion_receipt'], $names);
+        self::assertSame(['orion_outbox', 'orion_counter', 'orion_index', 'orion_alias', 'orion_receipt'], $names);
     }
 
     public function testEveryTableHasAPrimaryKey(): void
@@ -31,13 +31,23 @@ final class SchemaTest extends TestCase
         }
     }
 
-    public function testTheOutboxIsAddressableByOffset(): void
+    public function testTheOutboxIsAddressableByOffsetPerIndexAndHoldsOneRowPerDocument(): void
     {
         $outbox = Schema::table(Schema::OUTBOX);
 
+        self::assertSame(['index_name', 'outbox_offset'], array_map(static fn(Column $c): string => $c->name, $outbox->primaryKey()));
         self::assertSame(ColumnType::Int, $outbox->column('outbox_offset')->type);
         self::assertTrue($outbox->indexes[0]->unique);
-        self::assertSame(['outbox_offset'], $outbox->indexes[0]->columns);
+        self::assertSame(['index_name', 'document_id'], $outbox->indexes[0]->columns);
+    }
+
+    public function testCountersAreNamedIntegers(): void
+    {
+        $counter = Schema::table(Schema::COUNTER);
+
+        self::assertSame(['name'], array_map(static fn(Column $c): string => $c->name, $counter->primaryKey()));
+        self::assertSame(['name', 'value'], array_map(static fn(Column $c): string => $c->name, $counter->columns));
+        self::assertSame(ColumnType::Int, $counter->column('value')->type);
     }
 
     public function testTheRegistryHoldsOneRowPerPhysicalIndexAndOnePerAlias(): void

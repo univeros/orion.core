@@ -58,6 +58,18 @@ interface Storage
     public function count(string $table, array $criteria): int;
 
     /**
+     * Adds one to an integer column of the single row the criteria match and returns the new value, or null when no
+     * row matches. The row stays locked until the surrounding transaction ends, so concurrent callers queue behind it
+     * and values are handed out in commit order (the outbox offset, docs/decisions.md WP4). Runs as one atomic step
+     * when no transaction is open.
+     *
+     * @param array<string, mixed> $criteria
+     * @throws \LogicException when the criteria match more than one row; nothing is changed
+     * @throws \InvalidArgumentException on empty criteria
+     */
+    public function increment(string $table, array $criteria, string $column): ?int;
+
+    /**
      * Runs `$fn` inside a transaction on the same connection (a savepoint when nested), committing on return and
      * rolling back when it throws.
      *
