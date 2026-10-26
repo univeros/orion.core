@@ -21,7 +21,7 @@ final class SchemaTest extends TestCase
     {
         $names = array_map(static fn(Table $table): string => $table->name, Schema::tables());
 
-        self::assertSame(['orion_outbox', 'orion_counter', 'orion_dead_letter', 'orion_index', 'orion_alias', 'orion_receipt'], $names);
+        self::assertSame(['orion_outbox', 'orion_counter', 'orion_dead_letter', 'orion_index', 'orion_alias', 'orion_reindex', 'orion_receipt'], $names);
     }
 
     public function testEveryTableHasAPrimaryKey(): void

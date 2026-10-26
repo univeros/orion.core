@@ -7,6 +7,7 @@ namespace Orion\Wiring;
 use LogicException;
 use Orion\Lifecycle\AliasManager;
 use Orion\Lifecycle\Planner;
+use Orion\Lifecycle\Reindexer;
 use Orion\Observability\Metrics;
 use Orion\Observability\NullMetrics;
 use Orion\Outbox\DeadLetters;
@@ -40,6 +41,8 @@ final class Graph
     private array $instances = [];
     /** @var array<string, Planner> */
     private array $planners = [];
+    /** @var array<string, Reindexer> */
+    private array $reindexers = [];
 
     public function __construct(private readonly Config $config)
     {
@@ -145,6 +148,16 @@ final class Graph
     private function delivery(): Delivery
     {
         return $this->once(Delivery::class, fn(): Delivery => new Delivery($this->engines()));
+    }
+
+    /**
+     * Zero-downtime reindex by replay, for one registered engine.
+     */
+    public function reindexer(string $engine): Reindexer
+    {
+        $this->engines()->get($engine);
+
+        return $this->reindexers[$engine] ??= new Reindexer($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->delivery(), $this->issuer(), $this->clock(), $this->logger(), $this->metrics());
     }
 
     public function clock(): ClockInterface

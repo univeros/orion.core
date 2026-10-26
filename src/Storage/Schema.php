@@ -27,6 +27,8 @@ final class Schema
     public const string INDEX = 'orion_index';
     /** Which physical index each alias points at, for every engine; the only indirection on engines without native aliases. */
     public const string ALIAS = 'orion_alias';
+    /** The reindex in progress per alias and its lease: the lock that keeps two reindexes of one alias apart (v1 §8.3). */
+    public const string REINDEX = 'orion_reindex';
     /** The append-only, hash-chained, signed receipts (docs/spec/revision.md §3). */
     public const string RECEIPT = 'orion_receipt';
 
@@ -35,7 +37,7 @@ final class Schema
      */
     public static function tables(): array
     {
-        return [self::outbox(), self::counter(), self::deadLetter(), self::index(), self::alias(), self::receipt()];
+        return [self::outbox(), self::counter(), self::deadLetter(), self::index(), self::alias(), self::reindex(), self::receipt()];
     }
 
     public static function table(string $name): Table
@@ -104,6 +106,21 @@ final class Schema
             Column::string('engine', 64),
             Column::string('physical', 255),
             Column::datetime('swapped_at'),
+        ]);
+    }
+
+    private static function reindex(): Table
+    {
+        return Table::named(self::REINDEX, [
+            Column::string('alias', 255)->primary(),
+            Column::string('engine', 64),
+            Column::string('physical', 255),
+            Column::int('from_version'),
+            Column::int('position'),
+            Column::int('documents'),
+            Column::string('holder', 64),
+            Column::datetime('lease_until'),
+            Column::datetime('started_at'),
         ]);
     }
 

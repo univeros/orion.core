@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Orion\Lifecycle;
 
+use DateTimeImmutable;
 use InvalidArgumentException;
 use LogicException;
 use Orion\Adapter\Capability;
@@ -14,6 +15,7 @@ use Orion\Registry\IndexRegistry;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
+use Orion\Support\Row;
 use Psr\Clock\ClockInterface;
 
 use function array_map;
@@ -98,6 +100,16 @@ final readonly class AliasManager
     public function targetOf(IndexRegistration $current): IndexName
     {
         return $this->engines->get($current->engine)->supports(Capability::NativeAliases) ? $current->alias : $current->physical;
+    }
+
+    /**
+     * When the alias was last swapped, or null when it never was.
+     */
+    public function swappedAt(IndexName $alias): ?DateTimeImmutable
+    {
+        $row = $this->storage->findOne(Schema::ALIAS, ['alias' => $alias->value]);
+
+        return $row === null ? null : Row::date($row['swapped_at'], Schema::ALIAS . '.swapped_at');
     }
 
     /**

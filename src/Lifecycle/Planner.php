@@ -20,6 +20,7 @@ use Orion\Registry\IndexRegistry;
 use Orion\Schema\IndexSchema;
 use Orion\Schema\LiveSchema;
 use Orion\Schema\MigrationPlan;
+use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
 use Psr\Clock\ClockInterface;
@@ -81,6 +82,9 @@ final readonly class Planner
         $current = $this->current($desired->index);
         if ($current === null) {
             return $this->create($desired);
+        }
+        if ($this->storage->findOne(Schema::REINDEX, ['alias' => $current->alias->value]) !== null) {
+            throw new LogicException(sprintf('A reindex of %s is pending; apply once it completes, or abort it.', Assert::show($current->alias->value)));
         }
         $plan = MigrationPlan::between($desired, $this->live($current), $current->schema);
         if ($plan->requiresReindex()) {
