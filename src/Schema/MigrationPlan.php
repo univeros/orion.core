@@ -69,6 +69,14 @@ final readonly class MigrationPlan
         return ['index' => $this->index->value, 'changes' => array_map(static fn(Change $change): array => $change->toArray(), $this->changes)];
     }
 
+    /**
+     * The same changes for another index: the physical index an adapter applies them to.
+     */
+    public function named(IndexName $index): self
+    {
+        return new self($index, $this->changes);
+    }
+
     public function isEmpty(): bool
     {
         return $this->changes === [];

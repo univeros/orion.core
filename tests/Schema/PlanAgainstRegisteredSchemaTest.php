@@ -190,6 +190,17 @@ final class PlanAgainstRegisteredSchemaTest extends TestCase
         self::assertNotSame($a->hash(), $a->named(IndexName::of('products_v1'))->hash());
     }
 
+    public function testAPlanCanBeReaddressedToThePhysicalIndex(): void
+    {
+        $plan = MigrationPlan::between(self::schema()->keyword('brand'), self::live(self::schema()));
+
+        $physical = $plan->named(IndexName::of('products_v1'));
+
+        self::assertSame('products_v1', $physical->index->value);
+        self::assertSame($plan->changes, $physical->changes);
+        self::assertSame('products', $plan->index->value);
+    }
+
     public function testASchemaCanBeRenamedToItsPhysicalIndex(): void
     {
         $schema = self::schema()->orgKey('org_id')->native('elasticsearch', ['settings' => ['x' => 1]]);

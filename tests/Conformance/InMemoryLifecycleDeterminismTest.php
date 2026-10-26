@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Orion\Tests\Conformance;
+
+use Orion\Adapter\InMemory\InMemoryEngine;
+use Orion\Adapter\SchemaAdapter;
+use Orion\Adapter\SearchAdapter;
+use Orion\Adapter\WriteAdapter;
+use Orion\Testing\LifecycleDeterminismTestCase;
+
+final class InMemoryLifecycleDeterminismTest extends LifecycleDeterminismTestCase
+{
+    protected function createEngine(): SearchAdapter&SchemaAdapter&WriteAdapter
+    {
+        return new InMemoryEngine();
+    }
+}
