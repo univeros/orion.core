@@ -25,4 +25,11 @@ interface SchemaAdapter
 
     /** Deletes a physical index; a no-op when it does not exist. */
     public function drop(IndexName $index): void;
+
+    /**
+     * Points the alias at exactly this physical index, atomically, whatever it pointed at before (v1 §8.2).
+     *
+     * @throws UnsupportedClause when the engine lacks {@see Capability::NativeAliases}: core then keeps the indirection
+     */
+    public function alias(IndexName $alias, IndexName $physical): void;
 }

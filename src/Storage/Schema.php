@@ -15,9 +15,9 @@ final class Schema
 {
     /** The transactional write log, addressable by offset (v1 §10). Offset allocation is settled in WP4. */
     public const string OUTBOX = 'orion_outbox';
-    /** Registered indices: engine, schema and current physical index. */
+    /** The index registry: one row per versioned physical index with the schema it was built from (v1 §8.2). */
     public const string INDEX = 'orion_index';
-    /** Alias indirection for engines without native aliases (v1 §8.2). */
+    /** Which physical index each alias points at, for every engine; the only indirection on engines without native aliases. */
     public const string ALIAS = 'orion_alias';
     /** The append-only, hash-chained, signed receipts (docs/spec/revision.md §3). */
     public const string RECEIPT = 'orion_receipt';
@@ -60,13 +60,14 @@ final class Schema
     {
         return Table::named(self::INDEX, [
             Column::string('name', 255)->primary(),
+            Column::string('alias', 255),
             Column::string('engine', 64),
-            Column::string('physical', 255)->nullable(),
+            Column::int('version'),
             Column::json('definition'),
             Column::string('schema_hash', 64),
-            Column::datetime('registered_at'),
-            Column::datetime('updated_at'),
-        ]);
+            Column::datetime('created_at'),
+        ])
+            ->unique(['alias', 'version']);
     }
 
     private static function alias(): Table

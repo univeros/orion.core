@@ -146,6 +146,11 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
         unset($this->indices[$index->value]);
     }
 
+    public function alias(IndexName $alias, IndexName $physical): void
+    {
+        throw UnsupportedClause::missing(Capability::NativeAliases, 'alias ' . Assert::show($alias->value), self::NAME);
+    }
+
     #[Override]
     public function index(IndexName $index, Document ...$docs): BulkResult
     {

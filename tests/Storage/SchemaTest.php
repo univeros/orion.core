@@ -40,6 +40,21 @@ final class SchemaTest extends TestCase
         self::assertSame(['outbox_offset'], $outbox->indexes[0]->columns);
     }
 
+    public function testTheRegistryHoldsOneRowPerPhysicalIndexAndOnePerAlias(): void
+    {
+        $index = Schema::table(Schema::INDEX);
+        $alias = Schema::table(Schema::ALIAS);
+
+        self::assertSame(['name'], array_map(static fn(Column $c): string => $c->name, $index->primaryKey()));
+        self::assertSame(['name', 'alias', 'engine', 'version', 'definition', 'schema_hash', 'created_at'], array_map(static fn(Column $c): string => $c->name, $index->columns));
+        self::assertSame(ColumnType::Int, $index->column('version')->type);
+        self::assertSame(ColumnType::Json, $index->column('definition')->type);
+        self::assertTrue($index->indexes[0]->unique);
+        self::assertSame(['alias', 'version'], $index->indexes[0]->columns);
+        self::assertSame(['alias'], array_map(static fn(Column $c): string => $c->name, $alias->primaryKey()));
+        self::assertSame(['alias', 'engine', 'physical', 'swapped_at'], array_map(static fn(Column $c): string => $c->name, $alias->columns));
+    }
+
     public function testColumnsAreImmutable(): void
     {
         $column = Column::string('name', 80);
