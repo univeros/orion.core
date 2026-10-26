@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Orion\Wiring;
 
+use LogicException;
 use Orion\Lifecycle\AliasManager;
 use Orion\Lifecycle\Planner;
 use Orion\Observability\Metrics;
@@ -14,6 +15,8 @@ use Orion\Outbox\Dispatcher;
 use Orion\Outbox\Drain;
 use Orion\Outbox\Outbox;
 use Orion\Outbox\SyncDispatcher;
+use Orion\Receipt\ReceiptStore;
+use Orion\Receipt\Verifier;
 use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistry;
 use Orion\Storage\Storage;
@@ -93,6 +96,24 @@ final class Graph
         return $this->config->dispatcher ?? $this->once(SyncDispatcher::class, fn(): SyncDispatcher => new SyncDispatcher($this->drain()));
     }
 
+    /**
+     * The receipt chain, for reading; appending needs the configured signer.
+     */
+    public function receipts(): ReceiptStore
+    {
+        return $this->once(ReceiptStore::class, fn(): ReceiptStore => new ReceiptStore($this->storage(), $this->config->receiptSigner, $this->clock()));
+    }
+
+    /**
+     * @throws LogicException without a configured signer: signatures cannot be checked without its keys
+     */
+    public function verifier(): Verifier
+    {
+        $signer = $this->config->receiptSigner ?? throw new LogicException('Verifying receipts needs the ReceiptSigner that holds their keys; pass one in the Config.');
+
+        return $this->once(Verifier::class, fn(): Verifier => new Verifier($this->receipts(), $signer));
+    }
+
     public function metrics(): Metrics
     {
         return $this->config->metrics ?? $this->once(NullMetrics::class, static fn(): NullMetrics => new NullMetrics());
@@ -110,7 +131,15 @@ final class Graph
     {
         $this->engines()->get($engine);
 
-        return $this->planners[$engine] ??= new Planner($engine, $this->engines(), $this->registry(), $this->aliases(), $this->clock(), $this->logger());
+        return $this->planners[$engine] ??= new Planner($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->issuer(), $this->clock(), $this->logger());
+    }
+
+    /**
+     * The store lifecycle operations append to, or null when receipts are off.
+     */
+    private function issuer(): ?ReceiptStore
+    {
+        return $this->config->receiptSigner === null ? null : $this->receipts();
     }
 
     private function delivery(): Delivery

@@ -11,12 +11,16 @@ use Orion\Adapter\SchemaAdapter;
 use Orion\Adapter\SearchAdapter;
 use Orion\Adapter\WriteAdapter;
 use Orion\IndexName;
+use Orion\Outbox\Outbox;
+use Orion\Receipt\Receipt;
+use Orion\Receipt\ReceiptStore;
 use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistration;
 use Orion\Registry\IndexRegistry;
 use Orion\Schema\IndexSchema;
 use Orion\Schema\LiveSchema;
 use Orion\Schema\MigrationPlan;
+use Orion\Storage\Storage;
 use Orion\Support\Assert;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -27,7 +31,8 @@ use function sprintf;
 /**
  * The schema lifecycle for one engine (v1 §8.1, §8.2): a pure plan from the desired schema to what is live and
  * registered, and an apply that creates version 1 behind the alias, applies additive plans in place, and never
- * touches a live index for a breaking one. An additive plan the engine refuses with {@see RequiresReindex}
+ * touches a live index for a breaking one. A create and an apply each issue a receipt (v1 §11) in the transaction
+ * that records them, so neither the alias nor the registration moves without one. An additive plan the engine refuses with {@see RequiresReindex}
  * (Elasticsearch cannot add analysis to a live index) is reported as {@see Operation::ReindexRequired}, like a
  * breaking one.
  */
@@ -37,11 +42,17 @@ final readonly class Planner
     public const float DEFAULT_APPLY_TIMEOUT = 30.0;
     private const int FIRST_VERSION = 1;
 
+    /**
+     * @param ReceiptStore|null $receipts null when receipts are off (no signer configured)
+     */
     public function __construct(
         private string $engine,
+        private Storage $storage,
         private EngineRegistry $engines,
         private IndexRegistry $registry,
         private AliasManager $aliases,
+        private Outbox $outbox,
+        private ?ReceiptStore $receipts,
         private ClockInterface $clock,
         private LoggerInterface $logger,
         private float $applyTimeout = self::DEFAULT_APPLY_TIMEOUT,
@@ -75,6 +86,12 @@ final readonly class Planner
         if ($plan->requiresReindex()) {
             return new Outcome(Operation::ReindexRequired, $current, $plan);
         }
+        // Query-time attributes (a boost) change the declaration without changing the index: queries compile from
+        // the registration, so it is refreshed whenever the declaration differs, with or without an engine change.
+        $redeclared = $current->schema->hash() !== $desired->hash();
+        if ($plan->isEmpty() && !$redeclared) {
+            return new Outcome(Operation::Unchanged, $current, $plan);
+        }
         if (!$plan->isEmpty()) {
             try {
                 // The plan names the alias; the engine applies it to the physical index behind it.
@@ -83,14 +100,16 @@ final readonly class Planner
                 return new Outcome(Operation::ReindexRequired, $current, $plan);
             }
         }
-        // Query-time attributes (a boost) change the declaration without changing the index: queries compile from
-        // the registration, so it is refreshed whenever the declaration differs, with or without an engine change.
-        if ($current->schema->hash() !== $desired->hash()) {
-            $current = new IndexRegistration($current->physical, $current->alias, $current->engine, $current->version, $desired, $current->createdAt);
-            $this->registry->update($current);
-        }
+        $next = $redeclared ? new IndexRegistration($current->physical, $current->alias, $current->engine, $current->version, $desired, $current->createdAt) : $current;
+        $receipt = $this->storage->transaction(function () use ($redeclared, $next, $current): ?Receipt {
+            if ($redeclared) {
+                $this->registry->update($next);
+            }
 
-        return new Outcome($plan->isEmpty() ? Operation::Unchanged : Operation::Applied, $current, $plan);
+            return $this->receipt(Operation::Applied, $next, $current->version, 0);
+        });
+
+        return new Outcome(Operation::Applied, $next, $plan, $receipt);
     }
 
     /**
@@ -120,13 +139,28 @@ final readonly class Planner
         $this->registry->register($registration);
         try {
             $adapter->ensure($desired->named($physical));
-            $this->aliases->swap($this->engine, $alias, $physical);
+            $receipt = $this->storage->transaction(function () use ($alias, $physical, $registration): ?Receipt {
+                $this->aliases->swap($this->engine, $alias, $physical);
+
+                return $this->receipt(Operation::Created, $registration, null, 0);
+            });
         } catch (Throwable $failure) {
             $this->release($registration, $failure);
             throw $failure;
         }
 
-        return new Outcome(Operation::Created, $registration, MigrationPlan::between($desired, null));
+        return new Outcome(Operation::Created, $registration, MigrationPlan::between($desired, null), $receipt);
+    }
+
+    /**
+     * The receipt for an operation that changed the index or its registration, at the outbox head it saw; null when
+     * receipts are off. Call it inside the transaction that records the change, so neither commits without the other.
+     */
+    private function receipt(Operation $operation, IndexRegistration $to, ?int $fromVersion, int $documents): ?Receipt
+    {
+        $head = $this->outbox->head($to->alias);
+
+        return $this->receipts?->append($operation, $to, $fromVersion, $documents, $head, $head);
     }
 
     /**

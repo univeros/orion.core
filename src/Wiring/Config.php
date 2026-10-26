@@ -6,6 +6,7 @@ namespace Orion\Wiring;
 
 use Orion\Observability\Metrics;
 use Orion\Outbox\Dispatcher;
+use Orion\Receipt\ReceiptSigner;
 use Orion\Registry\EngineRegistry;
 use Orion\Storage\Storage;
 use Orion\Tenancy\Tenancy;
@@ -16,7 +17,8 @@ use Psr\SimpleCache\CacheInterface;
 
 /**
  * Everything an application hands Orion (docs/spec/revision.md §3). Storage, engines and tenancy are a
- * correctness or trust boundary and have no default; anything null takes the core default.
+ * correctness or trust boundary and have no default; anything null takes the core default. Receipts need key
+ * material only the host has: without a `receiptSigner` the lifecycle runs and issues none.
  */
 final readonly class Config
 {
@@ -36,6 +38,7 @@ final readonly class Config
         public ?array $manifestDirectories = null,
         public ?Dispatcher $dispatcher = null,
         public ?Metrics $metrics = null,
+        public ?ReceiptSigner $receiptSigner = null,
     ) {
     }
 

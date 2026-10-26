@@ -110,12 +110,12 @@ final class Schema
     private static function receipt(): Table
     {
         return Table::named(self::RECEIPT, [
-            Column::string('id', 36)->primary(),
-            Column::int('sequence'),
+            Column::int('sequence')->primary(),
             Column::string('operation', 32),
             Column::string('index_name', 255),
-            Column::string('from_version', 255)->nullable(),
-            Column::string('to_version', 255),
+            Column::string('engine', 64),
+            Column::int('from_version')->nullable(),
+            Column::int('to_version'),
             Column::int('document_count'),
             Column::string('schema_hash', 64),
             Column::int('from_offset'),
@@ -126,7 +126,6 @@ final class Schema
             Column::text('signature'),
             Column::datetime('recorded_at'),
         ])
-            ->unique(['sequence'])
             ->index(['index_name', 'sequence']);
     }
 }
