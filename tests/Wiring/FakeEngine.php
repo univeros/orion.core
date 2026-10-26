@@ -70,6 +70,11 @@ final class FakeEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
         throw new LogicException('Not wired for aliases.');
     }
 
+    public function resolve(IndexName $alias): ?IndexName
+    {
+        return null;
+    }
+
     public function index(IndexName $index, Document ...$docs): BulkResult
     {
         return BulkResult::completed();

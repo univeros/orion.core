@@ -40,4 +40,12 @@ interface SchemaAdapter
      * @throws UnsupportedClause when the engine lacks {@see Capability::NativeAliases}: core then keeps the indirection
      */
     public function alias(IndexName $alias, IndexName $physical): void;
+
+    /**
+     * The physical index the engine's alias points at, or null when the engine has no such alias. Core compares it
+     * with the alias row to find a swap the engine made and the registry never recorded.
+     *
+     * @throws UnsupportedClause when the engine lacks {@see Capability::NativeAliases}: the alias row is the only record
+     */
+    public function resolve(IndexName $alias): ?IndexName;
 }

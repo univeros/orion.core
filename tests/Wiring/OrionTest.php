@@ -22,6 +22,11 @@ use Psr\Log\NullLogger;
 use stdClass;
 use TypeError;
 
+use function file_put_contents;
+use function mkdir;
+use function sys_get_temp_dir;
+use function uniqid;
+
 final class OrionTest extends TestCase
 {
     public function testCreateBuildsTheGraphFromTheRequiredPorts(): void
@@ -81,6 +86,21 @@ final class OrionTest extends TestCase
 
         self::assertSame($graph->outbox(), $graph->outbox());
         self::assertSame(1, $storage->count(Schema::OUTBOX, []));
+    }
+
+    public function testTheManifestComesFromTheConfiguredDirectoriesAndTheDefaultIsOptional(): void
+    {
+        $directory = sys_get_temp_dir() . '/orion-manifests-' . uniqid();
+        mkdir($directory);
+        file_put_contents($directory . '/search.yaml', "index: products\nschema:\n  title: { type: text }\n");
+        $engines = new EngineRegistry(default: new FakeEngine());
+
+        $declared = Orion::create(new Config(storage: new InMemoryStorage(), engines: $engines, tenancy: Tenancy::single(), manifestDirectories: [$directory]))->graph();
+        $default = Orion::create(new Config(storage: new InMemoryStorage(), engines: $engines, tenancy: Tenancy::single()))->graph();
+
+        self::assertNotNull($declared->manifest()->find('products'));
+        self::assertSame($declared->manifest(), $declared->manifest());
+        self::assertSame([], $default->manifest()->declarations(), 'Without an api directory there is nothing declared.');
     }
 
     public function testBootingWithoutATenancyChoiceThrows(): void

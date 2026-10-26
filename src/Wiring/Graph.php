@@ -8,6 +8,8 @@ use LogicException;
 use Orion\Lifecycle\AliasManager;
 use Orion\Lifecycle\Planner;
 use Orion\Lifecycle\Reindexer;
+use Orion\Manifest\Loader;
+use Orion\Manifest\Manifest;
 use Orion\Observability\Metrics;
 use Orion\Observability\NullMetrics;
 use Orion\Outbox\DeadLetters;
@@ -30,6 +32,10 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Psr\SimpleCache\CacheInterface;
+
+use function array_filter;
+use function array_values;
+use function is_dir;
 
 /**
  * The Orion object graph, built explicitly from a {@see Config} with no container: every service once, on first
@@ -161,6 +167,22 @@ final class Graph
         $this->engines()->get($engine);
 
         return $this->reindexers[$engine] ??= new Reindexer($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->delivery(), $this->issuer(), $this->clock(), $this->logger(), $this->metrics());
+    }
+
+    /**
+     * The indices the application declares in `search:` manifests. The default directory (`api`) is optional; a
+     * directory the application names must exist.
+     */
+    public function manifest(): Manifest
+    {
+        return $this->once(Manifest::class, function (): Manifest {
+            $directories = $this->config->manifestDirectories();
+            if ($this->config->manifestDirectories === null) {
+                $directories = array_values(array_filter($directories, is_dir(...)));
+            }
+
+            return (new Loader(...$directories))->load();
+        });
     }
 
     public function clock(): ClockInterface
