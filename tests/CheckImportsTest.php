@@ -72,6 +72,33 @@ final class CheckImportsTest extends TestCase
         self::assertStringContainsString('packages/core/src/Leak.php', $output);
     }
 
+    public function testOrionsOwnAdapterNamespacePassesOutsideItsPackage(): void
+    {
+        $root = sys_get_temp_dir() . '/orion-imports-' . uniqid();
+        mkdir($root . '/packages/univeros/src', 0o777, true);
+        $adapter = 'Orion' . '\\Elasticsearch' . '\\ElasticsearchEngine';
+        file_put_contents($root . '/packages/univeros/src/Engines.php', "<?php\nuse " . $adapter . ";\n");
+
+        [$status, $output] = self::check($root);
+
+        self::assertSame(0, $status, $output);
+    }
+
+    public function testAnEngineClientStillFailsOutsideItsAdapterImportedOrFullyQualified(): void
+    {
+        $root = sys_get_temp_dir() . '/orion-imports-' . uniqid();
+        mkdir($root . '/packages/univeros/src', 0o777, true);
+        mkdir($root . '/packages/core/src', 0o777, true);
+        file_put_contents($root . '/packages/univeros/src/Engines.php', "<?php\nuse " . 'Elastic' . '\\Elasticsearch' . '\\Client;' . "\n");
+        file_put_contents($root . '/packages/core/src/Leak.php', "<?php\n\$x = new \\" . 'Elastic' . '\\Transport' . '\\Transport();' . "\n");
+
+        [$status, $output] = self::check($root);
+
+        self::assertSame(1, $status, $output);
+        self::assertStringContainsString('packages/univeros/src/Engines.php', $output);
+        self::assertStringContainsString('packages/core/src/Leak.php', $output);
+    }
+
     /**
      * @return array{0: int, 1: string}
      */
