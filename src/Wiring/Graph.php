@@ -6,7 +6,14 @@ namespace Orion\Wiring;
 
 use Orion\Lifecycle\AliasManager;
 use Orion\Lifecycle\Planner;
+use Orion\Observability\Metrics;
+use Orion\Observability\NullMetrics;
+use Orion\Outbox\DeadLetters;
+use Orion\Outbox\Delivery;
+use Orion\Outbox\Dispatcher;
+use Orion\Outbox\Drain;
 use Orion\Outbox\Outbox;
+use Orion\Outbox\SyncDispatcher;
 use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistry;
 use Orion\Storage\Storage;
@@ -68,6 +75,29 @@ final class Graph
         return $this->once(Outbox::class, fn(): Outbox => new Outbox($this->storage(), $this->clock()));
     }
 
+    /**
+     * Writes an index's outbox entries to its engine; run it after commits, through {@see dispatcher()} or the CLI.
+     */
+    public function drain(): Drain
+    {
+        return $this->once(Drain::class, fn(): Drain => new Drain($this->storage(), $this->outbox(), $this->aliases(), $this->delivery(), $this->deadLetters(), $this->metrics()));
+    }
+
+    public function deadLetters(): DeadLetters
+    {
+        return $this->once(DeadLetters::class, fn(): DeadLetters => new DeadLetters($this->storage(), $this->outbox(), $this->aliases(), $this->delivery(), $this->clock()));
+    }
+
+    public function dispatcher(): Dispatcher
+    {
+        return $this->config->dispatcher ?? $this->once(SyncDispatcher::class, fn(): SyncDispatcher => new SyncDispatcher($this->drain()));
+    }
+
+    public function metrics(): Metrics
+    {
+        return $this->config->metrics ?? $this->once(NullMetrics::class, static fn(): NullMetrics => new NullMetrics());
+    }
+
     public function aliases(): AliasManager
     {
         return $this->once(AliasManager::class, fn(): AliasManager => new AliasManager($this->storage(), $this->engines(), $this->registry(), $this->clock()));
@@ -81,6 +111,11 @@ final class Graph
         $this->engines()->get($engine);
 
         return $this->planners[$engine] ??= new Planner($engine, $this->engines(), $this->registry(), $this->aliases(), $this->clock(), $this->logger());
+    }
+
+    private function delivery(): Delivery
+    {
+        return $this->once(Delivery::class, fn(): Delivery => new Delivery($this->engines()));
     }
 
     public function clock(): ClockInterface

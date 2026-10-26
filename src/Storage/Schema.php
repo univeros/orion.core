@@ -21,6 +21,8 @@ final class Schema
     public const string OUTBOX = 'orion_outbox';
     /** Named integers: the outbox head per index (`outbox:<index>`), each drain cursor (`drain:<index>`), the receipt sequence. */
     public const string COUNTER = 'orion_counter';
+    /** Outbox entries the engine refused, one row per entry, kept for retry (v1 §10). */
+    public const string DEAD_LETTER = 'orion_dead_letter';
     /** The index registry: one row per versioned physical index with the schema it was built from (v1 §8.2). */
     public const string INDEX = 'orion_index';
     /** Which physical index each alias points at, for every engine; the only indirection on engines without native aliases. */
@@ -33,7 +35,7 @@ final class Schema
      */
     public static function tables(): array
     {
-        return [self::outbox(), self::counter(), self::index(), self::alias(), self::receipt()];
+        return [self::outbox(), self::counter(), self::deadLetter(), self::index(), self::alias(), self::receipt()];
     }
 
     public static function table(string $name): Table
@@ -66,6 +68,19 @@ final class Schema
             Column::string('name', 300)->primary(),
             Column::int('value'),
         ]);
+    }
+
+    private static function deadLetter(): Table
+    {
+        return Table::named(self::DEAD_LETTER, [
+            Column::string('index_name', 255)->primary(),
+            Column::int('outbox_offset')->primary(),
+            Column::string('document_id', 255),
+            Column::text('error'),
+            Column::int('attempts'),
+            Column::datetime('failed_at'),
+        ])
+            ->index(['index_name', 'document_id']);
     }
 
     private static function index(): Table

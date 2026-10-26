@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Orion\Wiring;
 
+use Orion\Observability\Metrics;
+use Orion\Outbox\Dispatcher;
 use Orion\Registry\EngineRegistry;
 use Orion\Storage\Storage;
 use Orion\Tenancy\Tenancy;
@@ -32,6 +34,8 @@ final readonly class Config
         public ?EventDispatcherInterface $events = null,
         public ?CacheInterface $cache = null,
         public ?array $manifestDirectories = null,
+        public ?Dispatcher $dispatcher = null,
+        public ?Metrics $metrics = null,
     ) {
     }
 

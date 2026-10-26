@@ -9,6 +9,7 @@ use InvalidArgumentException;
 use function is_finite;
 use function is_float;
 use function is_string;
+use function json_decode;
 use function json_encode;
 use function preg_match;
 use function sprintf;
@@ -91,6 +92,26 @@ final class Assert
         $shown = strlen($value) > self::MAX_SHOWN ? substr($value, 0, self::MAX_SHOWN) . '…' : $value;
 
         return (string) json_encode($shown, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /**
+     * At most `$bytes` bytes of valid UTF-8: a character the cut would split is dropped, invalid bytes are replaced.
+     */
+    public static function truncate(string $value, int $bytes): string
+    {
+        if (preg_match('//u', $value) !== 1) {
+            $value = (string) json_decode((string) json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE));
+        }
+        if (strlen($value) <= $bytes) {
+            return $value;
+        }
+        // Cutting valid UTF-8 can only leave a partial character at the end, at most three bytes of it.
+        $value = substr($value, 0, $bytes);
+        for ($dropped = 0; $dropped < 3 && preg_match('//u', $value) !== 1; ++$dropped) {
+            $value = substr($value, 0, -1);
+        }
+
+        return $value;
     }
 
     private static function matches(string $pattern, string $value, string $what, string $rule): string

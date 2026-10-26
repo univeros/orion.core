@@ -16,6 +16,7 @@ use Orion\Storage\Storage;
 use Orion\Support\Assert;
 use Psr\Clock\ClockInterface;
 
+use function array_map;
 use function is_string;
 use function sprintf;
 
@@ -87,10 +88,26 @@ final readonly class AliasManager
      */
     public function target(IndexName $alias): IndexName
     {
-        $current = $this->current($alias)
-            ?? throw new InvalidArgumentException(sprintf('The alias %s is not registered.', Assert::show($alias->value)));
+        return $this->targetOf($this->current($alias)
+            ?? throw new InvalidArgumentException(sprintf('The alias %s is not registered.', Assert::show($alias->value))));
+    }
 
-        return $this->engines->get($current->engine)->supports(Capability::NativeAliases) ? $alias : $current->physical;
+    /**
+     * {@see target()} for a registration already read.
+     */
+    public function targetOf(IndexRegistration $current): IndexName
+    {
+        return $this->engines->get($current->engine)->supports(Capability::NativeAliases) ? $current->alias : $current->physical;
+    }
+
+    /**
+     * Every alias Orion has swapped onto an index, by name.
+     *
+     * @return list<IndexName>
+     */
+    public function aliases(): array
+    {
+        return array_map(static fn(array $row): IndexName => IndexName::of(self::name($row['alias'])), $this->storage->findMany(Schema::ALIAS, [], ['alias' => 'asc']));
     }
 
     private static function name(mixed $value): string
