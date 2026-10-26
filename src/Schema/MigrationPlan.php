@@ -6,9 +6,12 @@ namespace Orion\Schema;
 
 use LogicException;
 use Orion\IndexName;
+use Orion\Support\Canonical;
 
 use function array_filter;
+use function array_key_exists;
 use function array_keys;
+use function array_map;
 use function array_push;
 use function array_unique;
 use function array_values;
@@ -22,9 +25,16 @@ use function usort;
  * Classification is total and fails closed: a new field is additive, and every other difference (removal, type,
  * analysis, flags, vector shape, a live field of unknown type, any attribute added later) is breaking. Query-time
  * attributes (`boost`) are not index state, no engine reports them, and they are left out of the diff.
+ *
+ * What no engine reports, the org key and the per-engine native settings, is diffed against the schema as
+ * registered, under paths no field can have ({@see ORG_KEY}, {@see NATIVE}); every difference there is breaking.
  */
 final readonly class MigrationPlan
 {
+    /** The path of an org key change; field names cannot start with `_`. */
+    public const string ORG_KEY = '_org_key';
+    /** The path prefix of a native settings change: `_native.<engine>`. */
+    public const string NATIVE = '_native';
     /** Read when a query is compiled, never stored in the index. */
     private const array QUERY_TIME_ATTRIBUTES = ['boost'];
 
@@ -36,14 +46,27 @@ final readonly class MigrationPlan
     }
 
     /**
-     * A missing live index plans every desired field as added.
+     * A missing live index plans every desired field as added. The org key and native settings are compared with
+     * `$registered`, the schema as Orion last applied it: against none, an index that is live but unregistered fails
+     * closed (whatever the desired schema declares is a breaking change), and an index that is neither is a create.
      */
-    public static function between(IndexSchema $desired, ?LiveSchema $live): self
+    public static function between(IndexSchema $desired, ?LiveSchema $live, ?IndexSchema $registered = null): self
     {
         $changes = self::diff($live === null ? [] : $live->fields, $desired->fields, '');
+        if ($live !== null || $registered !== null) {
+            array_push($changes, ...self::settings($registered, $desired));
+        }
         usort($changes, static fn(Change $a, Change $b): int => strcmp($a->path, $b->path));
 
         return new self($desired->index, $changes);
+    }
+
+    /**
+     * @return array{index: string, changes: list<array{path: string, kind: string, classification: string, before: mixed, after: mixed}>}
+     */
+    public function toArray(): array
+    {
+        return ['index' => $this->index->value, 'changes' => array_map(static fn(Change $change): array => $change->toArray(), $this->changes)];
     }
 
     public function isEmpty(): bool
@@ -85,12 +108,34 @@ final readonly class MigrationPlan
             throw new LogicException(sprintf('The plan for %s has breaking changes; they need a reindex, never an in-place apply.', $this->index->value));
         }
         foreach ($this->changes as $change) {
-            if ($change->kind === ChangeKind::Added && $change->after !== null) {
+            if ($change->kind === ChangeKind::Added && $change->after instanceof Field) {
                 $live = Field::addAt($live, $change->path, $change->after);
             }
         }
 
         return $live;
+    }
+
+    /**
+     * @return list<Change>
+     */
+    private static function settings(?IndexSchema $registered, IndexSchema $desired): array
+    {
+        $changes = [];
+        if ($registered?->orgKey !== $desired->orgKey) {
+            $changes[] = Change::setting(self::ORG_KEY, $registered?->orgKey, $desired->orgKey);
+        }
+        $before = array_filter($registered === null ? [] : $registered->native);
+        $after = array_filter($desired->native);
+        foreach (array_unique([...array_keys($before), ...array_keys($after)]) as $engine) {
+            $was = array_key_exists($engine, $before) ? Canonical::sort($before[$engine]) : null;
+            $is = array_key_exists($engine, $after) ? Canonical::sort($after[$engine]) : null;
+            if ($was !== $is) {
+                $changes[] = Change::setting(self::NATIVE . '.' . $engine, $before[$engine] ?? null, $after[$engine] ?? null);
+            }
+        }
+
+        return $changes;
     }
 
     /**

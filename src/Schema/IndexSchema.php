@@ -7,9 +7,11 @@ namespace Orion\Schema;
 use InvalidArgumentException;
 use Orion\IndexName;
 use Orion\Support\Assert;
+use Orion\Support\Canonical;
 use Orion\Support\Input;
 
 use function array_is_list;
+use function hash;
 use function preg_match;
 use function sprintf;
 
@@ -133,6 +135,23 @@ final readonly class IndexSchema
         }
 
         return new self($this->index, $this->fields, $this->orgKey, [...$this->native, $engine => $settings]);
+    }
+
+    /**
+     * The same declaration for another index: the physical, versioned index behind this alias.
+     */
+    public function named(IndexName $index): self
+    {
+        return new self($index, $this->fields, $this->orgKey, $this->native);
+    }
+
+    /**
+     * Identifies the declaration, whatever order it was written in: equal schemas hash equal. Recorded with the
+     * registration and, from WP4, in receipts.
+     */
+    public function hash(): string
+    {
+        return hash('sha256', Canonical::json($this->toArray()));
     }
 
     public function field(string $name): Field
