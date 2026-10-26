@@ -61,7 +61,7 @@ final class Graph
 
     public function aliases(): AliasManager
     {
-        return $this->once(AliasManager::class, fn(): AliasManager => new AliasManager($this->storage(), $this->engines(), $this->clock()));
+        return $this->once(AliasManager::class, fn(): AliasManager => new AliasManager($this->storage(), $this->engines(), $this->registry(), $this->clock()));
     }
 
     /**
@@ -71,7 +71,7 @@ final class Graph
     {
         $this->engines()->get($engine);
 
-        return $this->planners[$engine] ??= new Planner($engine, $this->engines(), $this->registry(), $this->aliases(), $this->storage(), $this->clock());
+        return $this->planners[$engine] ??= new Planner($engine, $this->engines(), $this->registry(), $this->aliases(), $this->clock(), $this->logger());
     }
 
     public function clock(): ClockInterface

@@ -34,30 +34,44 @@ final class IndexRegistryTest extends TestCase
     {
         $registration = self::registration(1);
 
-        $this->registry->record($registration);
+        $this->registry->register($registration);
 
         self::assertEquals($registration, $this->registry->find(IndexName::of('products_v1')));
         self::assertNull($this->registry->find(IndexName::of('products_v2')));
     }
 
-    public function testRecordingAnExistingPhysicalIndexReplacesItsDefinition(): void
+    public function testRegisteringAPhysicalIndexTwiceFails(): void
     {
-        $this->registry->record(self::registration(1));
+        $this->registry->register(self::registration(1));
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('products_v1');
+
+        $this->registry->register(self::registration(1, self::schema()->keyword('brand')));
+    }
+
+    public function testUpdatingReplacesTheDefinitionOfARegisteredIndexOnly(): void
+    {
+        $this->registry->register(self::registration(1));
         $changed = self::registration(1, self::schema()->keyword('brand'));
 
-        $this->registry->record($changed);
+        $this->registry->update($changed);
 
         self::assertSame(1, $this->storage->count(Schema::INDEX, []));
         self::assertEquals($changed, $this->registry->find(IndexName::of('products_v1')));
         self::assertSame($changed->schema->hash(), $this->storage->findOne(Schema::INDEX, ['name' => 'products_v1'])['schema_hash'] ?? null);
+
+        $this->expectException(LogicException::class);
+
+        $this->registry->update(self::registration(2));
     }
 
     public function testVersionsAreListedInOrderAndTheNextOneFollowsTheHighest(): void
     {
         self::assertSame(1, $this->registry->nextVersion(IndexName::of('products')));
-        $this->registry->record(self::registration(3));
-        $this->registry->record(self::registration(1));
-        $this->registry->record(new IndexRegistration(IndexName::of('other_v9'), IndexName::of('other'), 'in-memory', 9, IndexSchema::for('other')->keyword('id'), self::now()));
+        $this->registry->register(self::registration(3));
+        $this->registry->register(self::registration(1));
+        $this->registry->register(new IndexRegistration(IndexName::of('other_v9'), IndexName::of('other'), 'in-memory', 9, IndexSchema::for('other')->keyword('id'), self::now()));
 
         self::assertSame([1, 3], array_map(static fn(IndexRegistration $r): int => $r->version, $this->registry->versions(IndexName::of('products'))));
         self::assertSame(4, $this->registry->nextVersion(IndexName::of('products')));
@@ -65,8 +79,8 @@ final class IndexRegistryTest extends TestCase
 
     public function testForgettingRemovesThePhysicalIndexOnly(): void
     {
-        $this->registry->record(self::registration(1));
-        $this->registry->record(self::registration(2));
+        $this->registry->register(self::registration(1));
+        $this->registry->register(self::registration(2));
 
         $this->registry->forget(IndexName::of('products_v1'));
 

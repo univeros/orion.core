@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace Orion\Registry;
 
+use LogicException;
 use Orion\IndexName;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
+use Orion\Support\Assert;
 
 use function array_map;
 use function max;
+use function sprintf;
 
 /**
  * The versioned physical indices Orion has built, by alias, on the host's {@see Storage}.
@@ -21,13 +24,29 @@ final readonly class IndexRegistry
     }
 
     /**
-     * Inserts the physical index, or replaces what is recorded for it after an in-place apply.
+     * Claims the physical index: the first registration wins, the database's primary key arbitrating between
+     * concurrent callers, so whoever holds the row owns the index and may drop it.
+     *
+     * @throws LogicException when the physical index is already registered
      */
-    public function record(IndexRegistration $registration): void
+    public function register(IndexRegistration $registration): void
+    {
+        if ($this->find($registration->physical) !== null) {
+            throw new LogicException(sprintf('%s is already registered.', Assert::show($registration->physical->value)));
+        }
+        $this->storage->insert(Schema::INDEX, $registration->toRow());
+    }
+
+    /**
+     * Replaces what is recorded for a registered physical index, after an in-place apply.
+     *
+     * @throws LogicException when the physical index is not registered
+     */
+    public function update(IndexRegistration $registration): void
     {
         $row = $registration->toRow();
         if ($this->storage->update(Schema::INDEX, ['name' => $row['name']], $row) === 0) {
-            $this->storage->insert(Schema::INDEX, $row);
+            throw new LogicException(sprintf('%s is not registered.', Assert::show($registration->physical->value)));
         }
     }
 

@@ -30,6 +30,8 @@ final class AliasFakeEngine implements SearchAdapter, SchemaAdapter, WriteAdapte
     /** @var array<string, string> alias => physical */
     public array $aliases = [];
     public bool $failNextAlias = false;
+    public bool $failNextEnsure = false;
+    public bool $failNextDrop = false;
 
     public function __construct(private readonly InMemoryEngine $inner = new InMemoryEngine())
     {
@@ -61,6 +63,10 @@ final class AliasFakeEngine implements SearchAdapter, SchemaAdapter, WriteAdapte
 
     public function ensure(IndexSchema $schema): void
     {
+        if ($this->failNextEnsure) {
+            $this->failNextEnsure = false;
+            throw new RuntimeException('The engine refused to create the index.');
+        }
         $this->inner->ensure($schema);
     }
 
@@ -81,6 +87,10 @@ final class AliasFakeEngine implements SearchAdapter, SchemaAdapter, WriteAdapte
 
     public function drop(IndexName $index): void
     {
+        if ($this->failNextDrop) {
+            $this->failNextDrop = false;
+            throw new RuntimeException('The engine refused to drop the index.');
+        }
         $this->inner->drop($index);
     }
 

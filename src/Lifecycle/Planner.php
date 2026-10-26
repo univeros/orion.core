@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Orion\Lifecycle;
 
+use InvalidArgumentException;
 use LogicException;
+use Orion\Adapter\RequiresReindex;
 use Orion\Adapter\SchemaAdapter;
 use Orion\Adapter\SearchAdapter;
 use Orion\Adapter\WriteAdapter;
@@ -13,10 +15,11 @@ use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistration;
 use Orion\Registry\IndexRegistry;
 use Orion\Schema\IndexSchema;
+use Orion\Schema\LiveSchema;
 use Orion\Schema\MigrationPlan;
-use Orion\Storage\Storage;
 use Orion\Support\Assert;
 use Psr\Clock\ClockInterface;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 use function sprintf;
@@ -24,21 +27,23 @@ use function sprintf;
 /**
  * The schema lifecycle for one engine (v1 §8.1, §8.2): a pure plan from the desired schema to what is live and
  * registered, and an apply that creates version 1 behind the alias, applies additive plans in place, and never
- * touches a live index for a breaking one. An additive plan the engine refuses (`LogicException`: Elasticsearch
- * cannot add analysis to a live index) is reported as {@see Operation::ReindexRequired}, like a breaking one.
+ * touches a live index for a breaking one. An additive plan the engine refuses with {@see RequiresReindex}
+ * (Elasticsearch cannot add analysis to a live index) is reported as {@see Operation::ReindexRequired}, like a
+ * breaking one.
  */
 final readonly class Planner
 {
     /** How long an in-place apply may take to complete on an asynchronous engine. */
     public const float DEFAULT_APPLY_TIMEOUT = 30.0;
+    private const int FIRST_VERSION = 1;
 
     public function __construct(
         private string $engine,
         private EngineRegistry $engines,
         private IndexRegistry $registry,
         private AliasManager $aliases,
-        private Storage $storage,
         private ClockInterface $clock,
+        private LoggerInterface $logger,
         private float $applyTimeout = self::DEFAULT_APPLY_TIMEOUT,
     ) {
         Assert::notEmpty($engine, 'The engine name');
@@ -47,6 +52,8 @@ final readonly class Planner
     /**
      * Fields are diffed against the live physical index, the org key and native settings against the registration;
      * an alias Orion never built plans a create.
+     *
+     * @throws LogicException when the registered physical index is missing from the engine, or another engine built it
      */
     public function plan(IndexSchema $desired): MigrationPlan
     {
@@ -55,78 +62,114 @@ final readonly class Planner
             return MigrationPlan::between($desired, null);
         }
 
-        return MigrationPlan::between($desired, $this->adapter()->inspect($current->physical), $current->schema);
+        return MigrationPlan::between($desired, $this->live($current), $current->schema);
     }
 
     public function apply(IndexSchema $desired): Outcome
     {
         $current = $this->current($desired->index);
-        $plan = $this->plan($desired);
         if ($current === null) {
-            return $this->create($desired, $plan);
+            return $this->create($desired);
         }
-        if ($plan->isEmpty()) {
-            return new Outcome(Operation::Unchanged, $current, $plan);
-        }
+        $plan = MigrationPlan::between($desired, $this->live($current), $current->schema);
         if ($plan->requiresReindex()) {
             return new Outcome(Operation::ReindexRequired, $current, $plan);
         }
-        try {
-            // The plan names the alias; the engine applies it to the physical index behind it.
-            $this->adapter()->apply($plan->named($current->physical))->await($this->applyTimeout);
-        } catch (LogicException) {
-            return new Outcome(Operation::ReindexRequired, $current, $plan);
-        }
-        $applied = new IndexRegistration($current->physical, $current->alias, $current->engine, $current->version, $desired, $current->createdAt);
-        $this->registry->record($applied);
-
-        return new Outcome(Operation::Applied, $applied, $plan);
-    }
-
-    private function create(IndexSchema $desired, MigrationPlan $plan): Outcome
-    {
-        $alias = $desired->index;
-        $physical = IndexNamer::physical($alias, $this->registry->nextVersion($alias));
-        $adapter = $this->adapter();
-        // Fail closed on anything Orion did not build: adopting it would register a schema the live index may not have.
-        foreach ([$alias, $physical] as $taken) {
-            if ($adapter->inspect($taken) !== null) {
-                throw new LogicException(sprintf('%s exists on the engine %s but is not registered; drop it or register it before Orion builds %s.', Assert::show($taken->value), Assert::show($this->engine), Assert::show($alias->value)));
+        if (!$plan->isEmpty()) {
+            try {
+                // The plan names the alias; the engine applies it to the physical index behind it.
+                $this->adapter()->apply($plan->named($current->physical))->await($this->applyTimeout);
+            } catch (RequiresReindex) {
+                return new Outcome(Operation::ReindexRequired, $current, $plan);
             }
         }
-        $adapter->ensure($desired->named($physical));
-        $registration = new IndexRegistration($physical, $alias, $this->engine, 1, $desired, $this->clock->now());
-        try {
-            $this->storage->transaction(function () use ($registration, $alias, $physical): void {
-                $this->registry->record($registration);
-                $this->aliases->swap($this->engine, $alias, $physical);
-            });
-        } catch (Throwable $e) {
-            $adapter->drop($physical);
-            throw $e;
+        // Query-time attributes (a boost) change the declaration without changing the index: queries compile from
+        // the registration, so it is refreshed whenever the declaration differs, with or without an engine change.
+        if ($current->schema->hash() !== $desired->hash()) {
+            $current = new IndexRegistration($current->physical, $current->alias, $current->engine, $current->version, $desired, $current->createdAt);
+            $this->registry->update($current);
         }
 
-        return new Outcome(Operation::Created, $registration, $plan);
+        return new Outcome($plan->isEmpty() ? Operation::Unchanged : Operation::Applied, $current, $plan);
     }
 
     /**
-     * The registration the alias currently points at, or null when Orion never built it.
-     *
-     * @throws LogicException when the alias points at an unregistered index, or one another engine built
+     * Version 1 behind the alias. The registry row is claimed first (the database arbitrates concurrent creates), then
+     * the index is built and the alias swapped; on any failure the index this call owns is dropped and the claim
+     * released. Anything on the engine Orion did not build is refused: adopting it would register a schema the live
+     * index may not have.
+     */
+    private function create(IndexSchema $desired): Outcome
+    {
+        $alias = $desired->index;
+        if (IndexNamer::isPhysical($alias)) {
+            throw new InvalidArgumentException(sprintf('%s cannot be an alias: names ending in _v<n> are the physical indices behind one.', Assert::show($alias->value)));
+        }
+        $physical = IndexNamer::physical($alias, self::FIRST_VERSION);
+        $versions = $this->registry->versions($alias);
+        if ($versions !== []) {
+            throw new LogicException(sprintf('%s is registered (%s) but no alias points at it; recover it before building it again.', Assert::show($alias->value), Assert::show($versions[0]->physical->value)));
+        }
+        $adapter = $this->adapter();
+        foreach ([$alias, $physical] as $taken) {
+            if ($adapter->inspect($taken) !== null) {
+                throw new LogicException(sprintf('%s exists on the engine %s but is not registered; drop it before Orion builds %s.', Assert::show($taken->value), Assert::show($this->engine), Assert::show($alias->value)));
+            }
+        }
+        $registration = new IndexRegistration($physical, $alias, $this->engine, self::FIRST_VERSION, $desired, $this->clock->now());
+        $this->registry->register($registration);
+        try {
+            $adapter->ensure($desired->named($physical));
+            $this->aliases->swap($this->engine, $alias, $physical);
+        } catch (Throwable $failure) {
+            $this->release($registration, $failure);
+            throw $failure;
+        }
+
+        return new Outcome(Operation::Created, $registration, MigrationPlan::between($desired, null));
+    }
+
+    /**
+     * Drops the index this call built and releases its claim; a failing drop is logged, never allowed to hide the
+     * failure that caused it.
+     */
+    private function release(IndexRegistration $registration, Throwable $failure): void
+    {
+        try {
+            $this->adapter()->drop($registration->physical);
+        } catch (Throwable $drop) {
+            $this->logger->error('Orion could not drop {physical} after failing to build {alias}: {reason}; drop it by hand.', [
+                'physical' => $registration->physical->value,
+                'alias' => $registration->alias->value,
+                'reason' => $drop->getMessage(),
+                'exception' => $drop,
+                'cause' => $failure,
+            ]);
+        }
+        $this->registry->forget($registration->physical);
+    }
+
+    /**
+     * @throws LogicException when another engine built the alias
      */
     private function current(IndexName $alias): ?IndexRegistration
     {
-        $physical = $this->aliases->current($alias);
-        if ($physical === null) {
-            return null;
-        }
-        $registration = $this->registry->find($physical)
-            ?? throw new LogicException(sprintf('The alias %s points at %s, which is not registered.', Assert::show($alias->value), Assert::show($physical->value)));
-        if ($registration->engine !== $this->engine) {
+        $registration = $this->aliases->current($alias);
+        if ($registration !== null && $registration->engine !== $this->engine) {
             throw new LogicException(sprintf('%s was built by the engine %s, not %s.', Assert::show($alias->value), Assert::show($registration->engine), Assert::show($this->engine)));
         }
 
         return $registration;
+    }
+
+    /**
+     * @throws LogicException when the registered physical index is missing from the engine: planning against nothing
+     *                        would make every field additive
+     */
+    private function live(IndexRegistration $current): LiveSchema
+    {
+        return $this->adapter()->inspect($current->physical)
+            ?? throw new LogicException(sprintf('%s is registered for %s but missing from the engine %s; recover it before planning.', Assert::show($current->physical->value), Assert::show($current->alias->value), Assert::show($this->engine)));
     }
 
     private function adapter(): SearchAdapter&SchemaAdapter&WriteAdapter

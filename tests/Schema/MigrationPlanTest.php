@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Orion\Tests\Schema;
 
+use Orion\Adapter\RequiresReindex;
 use Orion\IndexName;
 use Orion\Schema\Change;
 use Orion\Schema\ChangeKind;
@@ -158,7 +159,7 @@ final class MigrationPlanTest extends TestCase
     {
         $plan = MigrationPlan::between(IndexSchema::for('products')->float('sku'), self::live(Field::keyword('sku')));
 
-        $this->expectException(\LogicException::class);
+        $this->expectException(RequiresReindex::class);
 
         $plan->applyTo([Field::keyword('sku')]);
     }

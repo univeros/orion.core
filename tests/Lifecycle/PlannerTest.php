@@ -29,6 +29,7 @@ final class PlannerTest extends TestCase
 {
     private InMemoryStorage $storage;
     private AliasFakeEngine $native;
+    private RecordingLogger $logger;
     private Graph $graph;
 
     protected function setUp(): void
@@ -39,6 +40,7 @@ final class PlannerTest extends TestCase
             engines: new EngineRegistry(memory: new InMemoryEngine(), native: $this->native = new AliasFakeEngine()),
             tenancy: Tenancy::single(),
             clock: new FixedClock(new DateTimeImmutable('2026-10-26 12:00:00')),
+            logger: $this->logger = new RecordingLogger(),
         ))->graph();
     }
 
@@ -60,6 +62,54 @@ final class PlannerTest extends TestCase
         $this->graph->planner('memory')->plan(IndexSchema::for('products')->keyword('sku'));
     }
 
+    public function testARegistrationWithoutAnAliasFailsClosedInsteadOfBuildingAnotherVersion(): void
+    {
+        // Another process claimed version 1 (or crashed between claiming it and swapping the alias).
+        $this->graph->registry()->register(new IndexRegistration(IndexName::of('products_v1'), IndexName::of('products'), 'memory', 1, IndexSchema::for('products')->keyword('sku'), new DateTimeImmutable()));
+        $engine = $this->graph->engines()->get('memory');
+
+        try {
+            $this->graph->planner('memory')->apply(IndexSchema::for('products')->keyword('sku'));
+            self::fail('A second version was built beside an unaliased first one.');
+        } catch (LogicException $e) {
+            self::assertStringContainsString('products_v1', $e->getMessage());
+            self::assertNull($engine->inspect(IndexName::of('products_v1')));
+            self::assertNull($engine->inspect(IndexName::of('products_v2')));
+            self::assertCount(1, $this->graph->registry()->versions(IndexName::of('products')), 'The other process\'s claim survived.');
+        }
+    }
+
+    public function testAFailedCreateReleasesTheClaim(): void
+    {
+        $this->native->failNextEnsure = true;
+
+        try {
+            $this->graph->planner('native')->apply(IndexSchema::for('products')->keyword('sku'));
+            self::fail('The refused create was swallowed.');
+        } catch (RuntimeException) {
+            self::assertSame([], $this->graph->registry()->versions(IndexName::of('products')));
+            self::assertNull($this->graph->aliases()->current(IndexName::of('products')));
+        }
+    }
+
+    public function testAFailedDropIsLoggedAndNeverHidesTheFailureThatCausedIt(): void
+    {
+        $this->native->failNextAlias = true;
+        $this->native->failNextDrop = true;
+
+        try {
+            $this->graph->planner('native')->apply(IndexSchema::for('products')->keyword('sku'));
+            self::fail('The refused swap was swallowed.');
+        } catch (RuntimeException $e) {
+            self::assertSame('The engine refused the alias.', $e->getMessage());
+            self::assertSame([], $this->graph->registry()->versions(IndexName::of('products')), 'The claim is released even when the drop fails.');
+            self::assertCount(1, $this->logger->records);
+            self::assertSame('error', $this->logger->records[0]['level']);
+            self::assertSame('products_v1', $this->logger->records[0]['context']['physical']);
+            self::assertSame('The engine refused to drop the index.', $this->logger->records[0]['context']['reason']);
+        }
+    }
+
     public function testAFailedSwapDropsTheIndexItCreatedAndRegistersNothing(): void
     {
         $this->native->failNextAlias = true;
@@ -77,7 +127,7 @@ final class PlannerTest extends TestCase
     public function testAnAliasOnAnotherEngineIsRefusedBeforeAnythingIsBuilt(): void
     {
         $this->storage->insert(Schema::ALIAS, ['alias' => 'products', 'engine' => 'native', 'physical' => 'products_v1', 'swapped_at' => new DateTimeImmutable()]);
-        $this->graph->registry()->record(new IndexRegistration(IndexName::of('products_v1'), IndexName::of('products'), 'native', 1, IndexSchema::for('products')->keyword('sku'), new DateTimeImmutable()));
+        $this->graph->registry()->register(new IndexRegistration(IndexName::of('products_v1'), IndexName::of('products'), 'native', 1, IndexSchema::for('products')->keyword('sku'), new DateTimeImmutable()));
 
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('native');

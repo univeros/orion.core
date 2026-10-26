@@ -17,10 +17,18 @@ interface SchemaAdapter
     /** What is live, or null when the index does not exist. */
     public function inspect(IndexName $index): ?LiveSchema;
 
-    /** The deterministic diff; adapters delegate to {@see MigrationPlan::between()}. */
+    /**
+     * The deterministic diff of fields against this engine's index; adapters delegate to {@see MigrationPlan::between()}.
+     * What no engine reports (the org key, native settings) is diffed by `Lifecycle\Planner` against the registry,
+     * which is the authoritative plan.
+     */
     public function plan(IndexSchema $desired): MigrationPlan;
 
-    /** Applies the additive changes in place; breaking ones are never applied to a live index. */
+    /**
+     * Applies the additive changes in place.
+     *
+     * @throws RequiresReindex for breaking changes, and for an additive change this engine cannot make live
+     */
     public function apply(MigrationPlan $plan): PendingTask;
 
     /** Deletes a physical index; a no-op when it does not exist. */

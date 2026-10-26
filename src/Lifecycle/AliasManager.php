@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Orion\Lifecycle;
 
 use InvalidArgumentException;
+use LogicException;
 use Orion\Adapter\Capability;
 use Orion\IndexName;
 use Orion\Registry\EngineRegistry;
+use Orion\Registry\IndexRegistration;
+use Orion\Registry\IndexRegistry;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
@@ -21,16 +24,27 @@ use function sprintf;
  * of every alias on every engine; on an engine with {@see Capability::NativeAliases} the engine's alias is moved in
  * the same transaction, and the application keeps talking to the alias. Elsewhere the row is the indirection and
  * {@see target()} hands the adapter the physical index.
+ *
+ * An alias only ever points at a physical index registered for it on its engine; a row that says otherwise is
+ * refused on read as well as on write, so a corrupted registry fails closed rather than redirecting an index.
  */
 final readonly class AliasManager
 {
-    public function __construct(private Storage $storage, private EngineRegistry $engines, private ClockInterface $clock)
+    public function __construct(private Storage $storage, private EngineRegistry $engines, private IndexRegistry $registry, private ClockInterface $clock)
     {
     }
 
+    /**
+     * @throws InvalidArgumentException when the physical index is not registered for this alias on this engine, or
+     *                                  the alias belongs to another engine
+     */
     public function swap(string $engine, IndexName $alias, IndexName $physical): void
     {
         $adapter = $this->engines->get($engine);
+        $registration = $this->registry->find($physical);
+        if ($registration === null || !$registration->alias->equals($alias) || $registration->engine !== $engine) {
+            throw new InvalidArgumentException(sprintf('%s is not registered as a version of %s on the engine %s.', Assert::show($physical->value), Assert::show($alias->value), Assert::show($engine)));
+        }
         $this->storage->transaction(function () use ($engine, $adapter, $alias, $physical): void {
             $row = ['alias' => $alias->value, 'engine' => $engine, 'physical' => $physical->value, 'swapped_at' => $this->clock->now()];
             $existing = $this->storage->findOne(Schema::ALIAS, ['alias' => $alias->value]);
@@ -48,13 +62,23 @@ final readonly class AliasManager
     }
 
     /**
-     * The physical index the alias points at, or null when nothing was ever swapped onto it.
+     * The registration the alias points at, or null when nothing was ever swapped onto it.
+     *
+     * @throws LogicException when the alias points at an index that is not registered for it on its engine
      */
-    public function current(IndexName $alias): ?IndexName
+    public function current(IndexName $alias): ?IndexRegistration
     {
         $row = $this->storage->findOne(Schema::ALIAS, ['alias' => $alias->value]);
+        if ($row === null) {
+            return null;
+        }
+        $physical = IndexName::of(self::name($row['physical']));
+        $registration = $this->registry->find($physical);
+        if ($registration === null || !$registration->alias->equals($alias) || $registration->engine !== self::name($row['engine'])) {
+            throw new LogicException(sprintf('The alias %s points at %s, which is not registered as one of its versions on its engine.', Assert::show($alias->value), Assert::show($physical->value)));
+        }
 
-        return $row === null ? null : IndexName::of(self::name($row['physical']));
+        return $registration;
     }
 
     /**
@@ -63,10 +87,10 @@ final readonly class AliasManager
      */
     public function target(IndexName $alias): IndexName
     {
-        $row = $this->storage->findOne(Schema::ALIAS, ['alias' => $alias->value])
+        $current = $this->current($alias)
             ?? throw new InvalidArgumentException(sprintf('The alias %s is not registered.', Assert::show($alias->value)));
 
-        return $this->engines->get(self::name($row['engine']))->supports(Capability::NativeAliases) ? $alias : IndexName::of(self::name($row['physical']));
+        return $this->engines->get($current->engine)->supports(Capability::NativeAliases) ? $alias : $current->physical;
     }
 
     private static function name(mixed $value): string
