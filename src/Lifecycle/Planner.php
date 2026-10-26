@@ -23,6 +23,7 @@ use Orion\Schema\MigrationPlan;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
+use Orion\Tenancy\ScopeInjector;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -53,6 +54,7 @@ final readonly class Planner
         private IndexRegistry $registry,
         private AliasManager $aliases,
         private Outbox $outbox,
+        private ScopeInjector $scopes,
         private ?ReceiptStore $receipts,
         private ClockInterface $clock,
         private LoggerInterface $logger,
@@ -77,8 +79,12 @@ final readonly class Planner
         return MigrationPlan::between($desired, $this->live($current), $current->schema);
     }
 
+    /**
+     * @throws LogicException when the schema does not fit the tenancy (an org key exactly when tenants are resolved)
+     */
     public function apply(IndexSchema $desired): Outcome
     {
+        $this->scopes->assertFits($desired);
         $current = $this->current($desired->index);
         if ($current === null) {
             return $this->create($desired);

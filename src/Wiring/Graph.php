@@ -18,6 +18,7 @@ use Orion\Outbox\Dispatcher;
 use Orion\Outbox\Drain;
 use Orion\Outbox\Outbox;
 use Orion\Outbox\SyncDispatcher;
+use Orion\Query\Searcher;
 use Orion\Receipt\ReceiptStore;
 use Orion\Receipt\Verifier;
 use Orion\Registry\EngineRegistry;
@@ -26,6 +27,7 @@ use Orion\Storage\Storage;
 use Orion\Support\InMemoryCache;
 use Orion\Support\NullEventDispatcher;
 use Orion\Support\SystemClock;
+use Orion\Tenancy\ScopeInjector;
 use Orion\Tenancy\Tenancy;
 use Psr\Clock\ClockInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -84,7 +86,7 @@ final class Graph
      */
     public function outbox(): Outbox
     {
-        return $this->once(Outbox::class, fn(): Outbox => new Outbox($this->storage(), $this->clock()));
+        return $this->once(Outbox::class, fn(): Outbox => new Outbox($this->storage(), $this->clock(), $this->scopes()));
     }
 
     /**
@@ -131,6 +133,22 @@ final class Graph
         return $this->config->metrics ?? $this->once(NullMetrics::class, static fn(): NullMetrics => new NullMetrics());
     }
 
+    /**
+     * Searches as the current tenant, the escape hatch included.
+     */
+    public function searcher(): Searcher
+    {
+        return $this->once(Searcher::class, fn(): Searcher => new Searcher($this->aliases(), $this->engines(), $this->scopes()));
+    }
+
+    /**
+     * Each operation's tenant scope on an index.
+     */
+    public function scopes(): ScopeInjector
+    {
+        return $this->once(ScopeInjector::class, fn(): ScopeInjector => new ScopeInjector($this->tenancy(), $this->aliases()));
+    }
+
     public function aliases(): AliasManager
     {
         return $this->once(AliasManager::class, fn(): AliasManager => new AliasManager($this->storage(), $this->engines(), $this->registry(), $this->clock()));
@@ -143,7 +161,7 @@ final class Graph
     {
         $this->engines()->get($engine);
 
-        return $this->planners[$engine] ??= new Planner($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->issuer(), $this->clock(), $this->logger());
+        return $this->planners[$engine] ??= new Planner($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->scopes(), $this->issuer(), $this->clock(), $this->logger());
     }
 
     /**
@@ -166,7 +184,7 @@ final class Graph
     {
         $this->engines()->get($engine);
 
-        return $this->reindexers[$engine] ??= new Reindexer($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->delivery(), $this->issuer(), $this->clock(), $this->logger(), $this->metrics());
+        return $this->reindexers[$engine] ??= new Reindexer($engine, $this->storage(), $this->engines(), $this->registry(), $this->aliases(), $this->outbox(), $this->scopes(), $this->delivery(), $this->issuer(), $this->clock(), $this->logger(), $this->metrics());
     }
 
     /**

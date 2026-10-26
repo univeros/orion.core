@@ -9,6 +9,7 @@ use Orion\Storage\Condition;
 use Orion\Storage\Counters;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
+use Orion\Tenancy\ScopeInjector;
 use Psr\Clock\ClockInterface;
 
 use function array_map;
@@ -29,24 +30,31 @@ final readonly class Outbox
 
     private Counters $counters;
 
-    public function __construct(private Storage $storage, private ClockInterface $clock)
+    public function __construct(private Storage $storage, private ClockInterface $clock, private ScopeInjector $scopes)
     {
         $this->counters = new Counters($storage);
     }
 
     /**
+     * Records as the current tenant: on a shared index the entry's id is the tenant's and the document carries the
+     * tenant in its org key.
+     *
      * @param array<string, mixed> $fields the projected document
      */
     public function index(IndexName $index, string $id, array $fields): Entry
     {
         Entry::encode($fields);
+        $scope = $this->scopes->forIndex($index);
 
-        return $this->record($index, $id, EntryKind::Index, $fields);
+        return $this->record($index, $scope->id($id), EntryKind::Index, $scope->fields($fields));
     }
 
+    /**
+     * Deletes the current tenant's document, never another tenant's of the same id.
+     */
     public function delete(IndexName $index, string $id): Entry
     {
-        return $this->record($index, $id, EntryKind::Delete, null);
+        return $this->record($index, $this->scopes->forIndex($index)->id($id), EntryKind::Delete, null);
     }
 
     /**

@@ -25,6 +25,7 @@ use Orion\Storage\DuplicateKey;
 use Orion\Storage\Schema;
 use Orion\Storage\Storage;
 use Orion\Support\Assert;
+use Orion\Tenancy\ScopeInjector;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Uid\Uuid;
@@ -60,6 +61,7 @@ final readonly class Reindexer
         private IndexRegistry $registry,
         private AliasManager $aliases,
         private Outbox $outbox,
+        private ScopeInjector $scopes,
         private Delivery $delivery,
         private ?ReceiptStore $receipts,
         private ClockInterface $clock,
@@ -80,6 +82,7 @@ final readonly class Reindexer
     public function reindex(IndexSchema $desired, int $batch = self::DEFAULT_BATCH): ReindexResult
     {
         Assert::positive($batch, 'A reindex batch');
+        $this->scopes->assertFits($desired);
         $this->current($desired->index);
         $job = $this->claim($desired, Uuid::v7()->toRfc4122());
         try {

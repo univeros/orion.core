@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace Orion\Tests\Outbox;
 
+use Orion\Wiring\Config;
+use Orion\Tenancy\Tenancy;
+use Orion\Registry\EngineRegistry;
+use Orion\Orion;
+use Orion\Adapter\InMemory\InMemoryEngine;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use Orion\IndexName;
@@ -32,7 +37,7 @@ final class OutboxTest extends TestCase
     protected function setUp(): void
     {
         $this->storage = new InMemoryStorage();
-        $this->outbox = new Outbox($this->storage, new FixedClock(new DateTimeImmutable('2026-10-26 12:00:00+00:00')));
+        $this->outbox = Orion::create(new Config(storage: $this->storage, engines: new EngineRegistry(memory: new InMemoryEngine()), tenancy: Tenancy::single(), clock: new FixedClock(new DateTimeImmutable('2026-10-26 12:00:00+00:00'))))->graph()->outbox();
         $this->products = IndexName::of('products');
     }
 
