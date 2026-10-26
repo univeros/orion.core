@@ -6,6 +6,7 @@ namespace Orion\Wiring;
 
 use Orion\Lifecycle\AliasManager;
 use Orion\Lifecycle\Planner;
+use Orion\Outbox\Outbox;
 use Orion\Registry\EngineRegistry;
 use Orion\Registry\IndexRegistry;
 use Orion\Storage\Storage;
@@ -57,6 +58,14 @@ final class Graph
     public function registry(): IndexRegistry
     {
         return $this->once(IndexRegistry::class, fn(): IndexRegistry => new IndexRegistry($this->storage()));
+    }
+
+    /**
+     * Record into it inside the transaction that writes the entity, on the configured storage.
+     */
+    public function outbox(): Outbox
+    {
+        return $this->once(Outbox::class, fn(): Outbox => new Outbox($this->storage(), $this->clock()));
     }
 
     public function aliases(): AliasManager

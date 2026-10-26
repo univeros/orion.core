@@ -7,8 +7,10 @@ namespace Orion\Tests\Wiring;
 use ArgumentCountError;
 use DateTimeImmutable;
 use InvalidArgumentException;
+use Orion\IndexName;
 use Orion\Orion;
 use Orion\Registry\EngineRegistry;
+use Orion\Storage\Schema;
 use Orion\Tenancy\Tenancy;
 use Orion\Tenancy\TenantResolver;
 use Orion\Tenancy\TenantScope;
@@ -68,6 +70,17 @@ final class OrionTest extends TestCase
 
         self::assertSame($clock, $graph->clock());
         self::assertSame(['config/search'], $graph->config()->manifestDirectories());
+    }
+
+    public function testTheOutboxRecordsOnTheConfiguredStorage(): void
+    {
+        $storage = new InMemoryStorage();
+        $graph = Orion::create(new Config(storage: $storage, engines: new EngineRegistry(default: new FakeEngine()), tenancy: Tenancy::single()))->graph();
+
+        $graph->outbox()->index(IndexName::of('products'), 'p1', ['title' => 'Lamp']);
+
+        self::assertSame($graph->outbox(), $graph->outbox());
+        self::assertSame(1, $storage->count(Schema::OUTBOX, []));
     }
 
     public function testBootingWithoutATenancyChoiceThrows(): void

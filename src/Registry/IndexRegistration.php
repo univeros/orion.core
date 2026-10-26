@@ -12,11 +12,8 @@ use Orion\Lifecycle\IndexNamer;
 use Orion\Schema\IndexSchema;
 use Orion\Support\Assert;
 use Orion\Support\Input;
+use Orion\Support\Row;
 
-use function is_int;
-use function is_numeric;
-use function is_string;
-use function json_decode;
 use function json_encode;
 use function sprintf;
 
@@ -76,7 +73,7 @@ final readonly class IndexRegistration
     {
         $path = 'orion_index';
         $row = Input::object($row, $path, self::COLUMNS);
-        $schema = IndexSchema::fromArray(json_decode(Input::string($row['definition'], $path . '.definition'), true, 512, JSON_THROW_ON_ERROR));
+        $schema = IndexSchema::fromArray(Row::json($row['definition'], $path . '.definition'));
         if ($schema->hash() !== Input::string($row['schema_hash'], $path . '.schema_hash')) {
             throw new LogicException(sprintf('The registered definition of %s does not match its hash; the registry was altered.', Assert::show($schema->index->value)));
         }
@@ -85,27 +82,9 @@ final readonly class IndexRegistration
             IndexName::of(Input::string($row['name'], $path . '.name')),
             IndexName::of(Input::string($row['alias'], $path . '.alias')),
             Input::string($row['engine'], $path . '.engine'),
-            self::int($row['version'], $path . '.version'),
+            Row::int($row['version'], $path . '.version'),
             $schema,
-            self::date($row['created_at'], $path . '.created_at'),
+            Row::date($row['created_at'], $path . '.created_at'),
         );
-    }
-
-    private static function int(mixed $value, string $path): int
-    {
-        if (is_string($value) && is_numeric($value)) {
-            $value = (int) $value;
-        }
-
-        return is_int($value) ? $value : throw new InvalidArgumentException(sprintf('%s must be an integer.', $path));
-    }
-
-    private static function date(mixed $value, string $path): DateTimeImmutable
-    {
-        if ($value instanceof DateTimeImmutable) {
-            return $value;
-        }
-
-        return new DateTimeImmutable(Input::string($value, $path));
     }
 }
