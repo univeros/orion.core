@@ -62,6 +62,7 @@ final class NoUnscopedQueryPathTest extends TestCase
         QueryCompiling::class,
         Compilation::class,
         'Orion\\Elastic' . 'search\\QueryCompiler',
+        'Orion\\Open' . 'Search\\QueryCompiler',
         'Orion\\Solr\\QueryCompiler',
         'Orion\\Solr\\NativeScope',
     ];
