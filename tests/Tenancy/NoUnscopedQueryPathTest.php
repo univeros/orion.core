@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Orion\Tests\Tenancy;
 
+use Orion\Adapter\QueryCompiling;
 use Orion\Adapter\SearchAdapter;
 use Orion\Query\Binder;
+use Orion\Query\Compilation;
 use Orion\Query\Query;
 use Orion\Query\Searcher;
 use Orion\Tenancy\IndexScope;
@@ -49,12 +51,16 @@ final class NoUnscopedQueryPathTest extends TestCase
      * Where a query may go: the searcher, which binds it to the schema (the binder, which executes nothing) and
      * scopes it through the index scope; the engine adapters it then calls;
      * each engine's compiler, which turns a query into native parameters and executes nothing (named in pieces so this
-     * file does not trip bin/check-imports); Solr's `NativeScope`, which restricts a native request to the scope.
+     * file does not trip bin/check-imports); Solr's `NativeScope`, which restricts a native request to the scope;
+     * `QueryCompiling`, the engines' compile-only port the searcher calls on the scoped query; `Compilation`, the
+     * value that carries the scoped query and its native form back, executing nothing.
      */
     private const array REVIEWED = [
         Searcher::class,
         IndexScope::class,
         Binder::class,
+        QueryCompiling::class,
+        Compilation::class,
         'Orion\\Elastic' . 'search\\QueryCompiler',
         'Orion\\Solr\\QueryCompiler',
         'Orion\\Solr\\NativeScope',

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Orion\Query;
 
 use InvalidArgumentException;
+use LogicException;
 use Orion\Adapter\Capability;
+use Orion\Adapter\QueryCompiling;
 use Orion\Adapter\SearchAdapter;
 use Orion\Adapter\UnsupportedClause;
 use Orion\IndexName;
@@ -53,17 +55,45 @@ final readonly class Searcher
         $current = $this->current($query->index);
         $scope = $this->scopes->scope($current->schema);
         $engine = $this->engines->get($current->engine);
-        $query = Binder::bind($query, $current->schema);
-        if ($query->page->depth() > Page::WINDOW) {
-            throw UnsupportedClause::deepPaging(Page::WINDOW, $query->page->depth(), $current->engine);
-        }
+        $query = self::bound($query, $current);
         $target = $this->aliases->targetOf($current);
         $scoped = $scope->query($query);
-        if ($query->vector !== null && $query->clauses !== [] && !$engine->supports(Capability::HybridFusion)) {
+        if (self::fusedInCore($engine, $query)) {
             return $scope->results($this->fuse($engine, $target, $scoped, $current->engine));
         }
 
         return $scope->results($engine->search($target, $scoped));
+    }
+
+    /**
+     * What `search()` would send for the query, without sending it (v1 §15, `compile_query`): the same tenant,
+     * binding, window and scope, then the engine's native form of the scoped query, or of each leg when core fuses.
+     *
+     * @throws LogicException when the engine cannot show its native query
+     * @throws NoTenant|InvalidArgumentException|UnsupportedClause as `search()` would
+     */
+    public function compile(Query $query): Compilation
+    {
+        $this->scopes->current();
+        $current = $this->current($query->index);
+        $scope = $this->scopes->scope($current->schema);
+        $engine = $this->engines->get($current->engine);
+        if (!$engine instanceof QueryCompiling) {
+            throw new LogicException(sprintf('The engine %s cannot show its native query.', $current->engine));
+        }
+        $query = self::bound($query, $current);
+        $target = $this->aliases->targetOf($current);
+        $scoped = $scope->query($query);
+        if (!self::fusedInCore($engine, $query)) {
+            return new Compilation($current->engine, $target, $scoped, $engine->compile($target, $scoped), null, null);
+        }
+        self::reversed($scoped);
+        [$depth, $k] = self::legs($scoped, $current->engine);
+
+        return new Compilation($current->engine, $target, $scoped, null, [
+            self::LEXICAL => $engine->compile($target, $scoped->lexicalLeg($depth)),
+            self::VECTOR => $engine->compile($target, $scoped->vectorLeg($k)),
+        ], $scoped->fusion ?? Fusion::reciprocalRank());
     }
 
     /**
@@ -86,6 +116,40 @@ final readonly class Searcher
      */
     private function fuse(SearchAdapter $engine, IndexName $target, Query $query, string $name): ResultSet
     {
+        $reversed = self::reversed($query);
+        [$depth, $k] = self::legs($query, $name);
+        $fusion = $query->fusion ?? Fusion::reciprocalRank();
+        $lexical = $engine->search($target, $query->lexicalLeg($depth));
+        $vector = $engine->search($target, $query->vectorLeg($k));
+        $fused = $fusion->fuse([self::LEXICAL => $lexical->hits, self::VECTOR => $vector->hits]);
+        $hits = array_slice($reversed ? array_reverse($fused->hits) : $fused->hits, ($query->page->page - 1) * $query->page->size, $query->page->size);
+
+        return new ResultSet($hits, count($fused->hits), true, $lexical->facets, $lexical->tookMs + $vector->tookMs, $fused->trace);
+    }
+
+    /**
+     * The query bound to the registered schema, within the offset window.
+     */
+    private static function bound(Query $query, IndexRegistration $current): Query
+    {
+        $query = Binder::bind($query, $current->schema);
+        if ($query->page->depth() > Page::WINDOW) {
+            throw UnsupportedClause::deepPaging(Page::WINDOW, $query->page->depth(), $current->engine);
+        }
+
+        return $query;
+    }
+
+    private static function fusedInCore(SearchAdapter $engine, Query $query): bool
+    {
+        return $query->vector !== null && $query->clauses !== [] && !$engine->supports(Capability::HybridFusion);
+    }
+
+    /**
+     * Whether the fused ranking is read in reverse: a sort other than relevance has no meaning over it and is refused.
+     */
+    private static function reversed(Query $query): bool
+    {
         $reversed = false;
         foreach ($query->sorts as $sort) {
             if ($sort->field !== Sort::SCORE) {
@@ -93,18 +157,23 @@ final readonly class Searcher
             }
             $reversed = $sort->direction === Direction::Asc;
         }
+
+        return $reversed;
+    }
+
+    /**
+     * How deep each leg reads: the page's depth for the lexical leg, at most the vector's k for the vector leg.
+     *
+     * @return array{int, int}
+     */
+    private static function legs(Query $query, string $name): array
+    {
         $depth = $query->page->depth();
         if ($depth > self::FUSION_WINDOW) {
             throw UnsupportedClause::deepPaging(self::FUSION_WINDOW, $depth, $name . ' with core fusion');
         }
-        $fusion = $query->fusion ?? Fusion::reciprocalRank();
-        $k = $query->vector->k ?? $depth;
-        $lexical = $engine->search($target, $query->lexicalLeg($depth));
-        $vector = $engine->search($target, $query->vectorLeg(min($depth, $k)));
-        $fused = $fusion->fuse([self::LEXICAL => $lexical->hits, self::VECTOR => $vector->hits]);
-        $hits = array_slice($reversed ? array_reverse($fused->hits) : $fused->hits, ($query->page->page - 1) * $query->page->size, $query->page->size);
 
-        return new ResultSet($hits, count($fused->hits), true, $lexical->facets, $lexical->tookMs + $vector->tookMs, $fused->trace);
+        return [$depth, min($depth, $query->vector->k ?? $depth)];
     }
 
     private function current(IndexName $alias): IndexRegistration

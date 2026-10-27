@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use LogicException;
 use Orion\Adapter\Capability;
 use Orion\Adapter\PendingTask;
+use Orion\Adapter\QueryCompiling;
 use Orion\Adapter\SchemaAdapter;
 use Orion\Adapter\SearchAdapter;
 use Orion\Adapter\UnsupportedClause;
@@ -56,7 +57,7 @@ use const SORT_STRING;
  * conformance suite as the real engines. `raw()` takes `callable(array $source): bool`. No native fusion, nested
  * documents, aliases or cursors; version-stamped writes and deletes, with tombstones kept forever.
  */
-final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
+final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter, QueryCompiling
 {
     private const string NAME = 'in-memory';
     private const array CAPABILITIES = [Capability::Vectors, Capability::Facets, Capability::Highlighting, Capability::OptimisticConcurrency];
@@ -68,6 +69,15 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
     public function supports(Capability $capability): bool
     {
         return in_array($capability, self::CAPABILITIES, true);
+    }
+
+    /**
+     * The in-memory engine has no query language: it runs the neutral query itself, so that is its native form.
+     */
+    #[Override]
+    public function compile(IndexName $index, Query $query): array
+    {
+        return $query->toArray();
     }
 
     #[Override]
