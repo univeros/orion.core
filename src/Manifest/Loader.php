@@ -25,10 +25,10 @@ use function sprintf;
 /**
  * Reads the `search:` manifests (v1 §12, docs/spec/revision.md §3): every `search.yaml` or `*.search.yaml` (or `.yml`)
  * under the directories, each declaring one index: `index`, `schema` (its fields), and optionally `engine`,
- * `org_key` and `native`. `source` and `search` (the projector and the endpoint) are reserved for the work package
- * that serves the endpoint. Unknown keys, invalid schemas and an index declared twice are refused with the file
- * named; YAML is parsed without PHP objects or constants. Files are read in path order, so the result is the same on
- * every machine.
+ * `org_key`, `native`, `source` (the entity and projector, {@see Source}) and `search` (the endpoint it serves,
+ * {@see Endpoint}, checked against the schema). Unknown keys, invalid schemas, an endpoint route declared twice and an
+ * index declared twice are refused with the file named; YAML is parsed without PHP objects or constants. Files are
+ * read in path order, so the result is the same on every machine.
  */
 final readonly class Loader
 {
@@ -56,6 +56,16 @@ final readonly class Loader
             $declarations[$index] = $declaration;
         }
         ksort($declarations);
+        $routes = [];
+        foreach ($declarations as $declaration) {
+            $route = $declaration->endpoint === null ? null : $declaration->endpoint->method . ' ' . $declaration->endpoint->path;
+            if ($route !== null && isset($routes[$route])) {
+                throw new InvalidArgumentException(sprintf('The endpoint %s is declared twice, in %s and %s.', $route, $routes[$route], $declaration->file));
+            }
+            if ($route !== null) {
+                $routes[$route] = $declaration->file;
+            }
+        }
 
         return new Manifest($declarations);
     }
@@ -100,11 +110,6 @@ final readonly class Loader
         try {
             $data = Input::object(Yaml::parseFile($file, Yaml::PARSE_EXCEPTION_ON_INVALID_TYPE), 'manifest', self::REQUIRED, self::OPTIONAL);
             Input::map($data['schema'], 'manifest.schema');
-            foreach (['source', 'search'] as $reserved) {
-                if (isset($data[$reserved])) {
-                    Input::map($data[$reserved], 'manifest.' . $reserved);
-                }
-            }
             $schema = IndexSchema::fromArray([
                 'index' => $data['index'],
                 'fields' => $data['schema'],
@@ -112,12 +117,14 @@ final readonly class Loader
                 'native' => $data['native'] ?? [],
             ]);
             $engine = isset($data['engine']) ? Input::string($data['engine'], 'manifest.engine') : null;
+            $source = isset($data['source']) ? Source::fromArray($data['source'], 'manifest.source') : null;
+            $endpoint = isset($data['search']) ? Endpoint::fromArray($data['search'], $schema, 'manifest.search') : null;
         } catch (ParseException $invalid) {
             throw new InvalidArgumentException(sprintf('%s is not YAML: %s', $file, $invalid->getMessage()), 0, $invalid);
         } catch (Throwable $invalid) {
             throw new InvalidArgumentException(sprintf('%s: %s', $file, $invalid->getMessage()), 0, $invalid);
         }
 
-        return new Declaration($schema, $engine, $file);
+        return new Declaration($schema, $engine, $file, $source, $endpoint);
     }
 }
