@@ -12,12 +12,14 @@ use function intdiv;
 use const PHP_INT_MAX;
 
 /**
- * Offset pagination: 1-based page number and page size. The offset always fits an int; how deep an engine lets you
- * page is the adapter's to refuse.
+ * Offset pagination: 1-based page number and page size. The offset always fits an int; the searcher refuses a page
+ * past {@see WINDOW} with a typed `UnsupportedClause`, the same on every engine.
  */
 final readonly class Page
 {
     public const int MAX_SIZE = 1000;
+    /** The deepest result offset pagination reaches: Elasticsearch's `max_result_window`, the lowest of the engines. */
+    public const int WINDOW = 10000;
 
     public function __construct(public int $page, public int $size)
     {
@@ -31,6 +33,14 @@ final readonly class Page
     public function toArray(): array
     {
         return ['page' => $this->page, 'size' => $this->size];
+    }
+
+    /**
+     * The result offset of the page's last hit.
+     */
+    public function depth(): int
+    {
+        return $this->page * $this->size;
     }
 
     public static function fromArray(mixed $data, string $path): self

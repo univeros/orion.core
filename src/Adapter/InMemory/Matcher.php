@@ -28,6 +28,7 @@ use function is_array;
 use function is_bool;
 use function is_numeric;
 use function is_scalar;
+use function max;
 use function preg_split;
 use function sqrt;
 use function str_starts_with;
@@ -37,7 +38,9 @@ use const PREG_SPLIT_NO_EMPTY;
 
 /**
  * Evaluates clauses, filters and vector similarity against one document's source. Text analysis is ASCII
- * lowercasing and splitting on anything that is not a letter or digit: enough for development, not a stemmer.
+ * lowercasing and splitting on anything that is not a letter or digit: enough for development, not a stemmer. A
+ * clause scores its best field (matches times the field's weight, as `best_fields` and dismax do); the schema's boost
+ * reaches it as a weight, applied by the searcher, as on every engine.
  */
 final readonly class Matcher
 {
@@ -63,8 +66,22 @@ final readonly class Matcher
      */
     public function score(Clause $clause, array $source): float
     {
-        $field = $this->fields[$clause->field] ?? null;
-        $values = $this->values($source, $clause->field);
+        $score = 0.0;
+        foreach ($clause->fields as $path => $weight) {
+            // The best field wins, as Elasticsearch's best_fields and Solr's dismax rank a multi-field match.
+            $score = max($score, $this->scoreField($clause, $path, $source) * $weight);
+        }
+
+        return $score;
+    }
+
+    /**
+     * @param array<string, mixed> $source
+     */
+    private function scoreField(Clause $clause, string $path, array $source): float
+    {
+        $field = $this->fields[$path] ?? null;
+        $values = $this->values($source, $path);
         if ($field === null || $values === []) {
             return 0.0;
         }
@@ -86,7 +103,7 @@ final readonly class Matcher
             };
         }
 
-        return $hits * $field->boost;
+        return (float) $hits;
     }
 
     /**
@@ -129,6 +146,28 @@ final readonly class Matcher
             VectorMetric::Euclidean => 1.0 / (1.0 + sqrt($distance)),
             default => $normA > 0 && $normB > 0 ? $dot / (sqrt($normA) * sqrt($normB)) : 0.0,
         };
+    }
+
+    /**
+     * The source as a hit carries it: without its vector fields, which no engine returns (Elasticsearch leaves them
+     * out of the source; the others follow, so a hit is the same everywhere and never carries a thousand floats).
+     *
+     * @param array<string, mixed> $source
+     * @return array<string, mixed>
+     */
+    public function withoutVectors(array $source, string $prefix = ''): array
+    {
+        $kept = [];
+        foreach ($source as $name => $value) {
+            $path = $prefix . $name;
+            $field = $this->fields[$path] ?? null;
+            if ($field?->type === FieldType::Vector) {
+                continue;
+            }
+            $kept[$name] = is_array($value) && !array_is_list($value) ? $this->withoutVectors($value, $path . '.') : $value;
+        }
+
+        return $kept;
     }
 
     /**

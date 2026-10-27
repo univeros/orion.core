@@ -39,6 +39,16 @@ final readonly class ScopeInjector
     }
 
     /**
+     * The tenant of the current operation, resolved now, or null under single tenancy.
+     *
+     * @throws NoTenant under a resolver, when the context has none
+     */
+    public function current(): ?TenantScope
+    {
+        return $this->tenancy->resolver?->resolve();
+    }
+
+    /**
      * The scope of one operation on an index with this schema, the tenant resolved now.
      */
     public function scope(IndexSchema $schema): IndexScope

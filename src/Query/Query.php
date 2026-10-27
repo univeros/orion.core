@@ -44,9 +44,12 @@ final readonly class Query
         return new self(IndexName::of($index));
     }
 
-    public function match(string $field, string $text): self
+    /**
+     * @param string|list<string>|array<string, float> $fields one field, several at weight 1, or weights by field
+     */
+    public function match(string|array $fields, string $text): self
     {
-        return $this->with(clauses: [...$this->clauses, Clause::match($field, $text)]);
+        return $this->with(clauses: [...$this->clauses, Clause::match($fields, $text)]);
     }
 
     public function term(string $field, string|int|float|bool $value): self
@@ -104,6 +107,35 @@ final readonly class Query
     public function paginate(int $page = 1, int $size = self::DEFAULT_PAGE_SIZE): self
     {
         return $this->with(page: new Page($page, $size));
+    }
+
+    /**
+     * A copy with these clauses, for the binder that weighs them.
+     *
+     * @param list<Clause> $clauses
+     */
+    public function withClauses(array $clauses): self
+    {
+        return $this->with(clauses: $clauses);
+    }
+
+    /**
+     * The lexical leg of a hybrid query, for core fusion: the first `$depth` hits of the query without its vector
+     * clause or sorts (each leg is ranked by relevance; the fusion orders), so an engine without native fusion can rank
+     * it alone.
+     */
+    public function lexicalLeg(int $depth): self
+    {
+        return $this->with(vector: null, fusion: null, sorts: [], page: new Page(1, $depth));
+    }
+
+    /**
+     * The vector leg: the first `$depth` nearest neighbours of the query without its lexical clauses. Facets and
+     * highlights belong to the lexical leg.
+     */
+    public function vectorLeg(int $depth): self
+    {
+        return $this->with(clauses: [], fusion: null, sorts: [], facets: [], highlights: [], page: new Page(1, $depth));
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Orion\Tests\Tenancy;
 
 use Orion\Adapter\SearchAdapter;
+use Orion\Query\Binder;
 use Orion\Query\Query;
 use Orion\Query\Searcher;
 use Orion\Tenancy\IndexScope;
@@ -45,13 +46,15 @@ use const JSON_THROW_ON_ERROR;
 final class NoUnscopedQueryPathTest extends TestCase
 {
     /**
-     * Where a query may go: the searcher, which scopes it through the index scope; the engine adapters it then calls;
+     * Where a query may go: the searcher, which binds it to the schema (the binder, which executes nothing) and
+     * scopes it through the index scope; the engine adapters it then calls;
      * each engine's compiler, which turns a query into native parameters and executes nothing (named in pieces so this
      * file does not trip bin/check-imports); Solr's `NativeScope`, which restricts a native request to the scope.
      */
     private const array REVIEWED = [
         Searcher::class,
         IndexScope::class,
+        Binder::class,
         'Orion\\Elastic' . 'search\\QueryCompiler',
         'Orion\\Solr\\QueryCompiler',
         'Orion\\Solr\\NativeScope',

@@ -99,7 +99,7 @@ final readonly class Shaper
             $terms = [];
             $prefixes = [];
             foreach ($clauses as $clause) {
-                if ($clause->field !== $field) {
+                if (!isset($clause->fields[$field])) {
                     continue;
                 }
                 if ($clause->kind === ClauseKind::Prefix) {

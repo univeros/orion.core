@@ -11,6 +11,7 @@ use Orion\Support\Canonical;
 use Orion\Support\Input;
 
 use function array_is_list;
+use function explode;
 use function hash;
 use function preg_match;
 use function sprintf;
@@ -152,6 +153,24 @@ final readonly class IndexSchema
     public function hash(): string
     {
         return hash('sha256', Canonical::json($this->toArray()));
+    }
+
+    /**
+     * The field at a dotted path (`variants.size`), or null when the schema does not declare it.
+     */
+    public function fieldAt(string $path): ?Field
+    {
+        $fields = $this->fields;
+        $field = null;
+        foreach (explode('.', $path) as $name) {
+            $field = Field::byName($fields)[$name] ?? null;
+            if ($field === null) {
+                return null;
+            }
+            $fields = $field->fields;
+        }
+
+        return $field;
     }
 
     public function field(string $name): Field

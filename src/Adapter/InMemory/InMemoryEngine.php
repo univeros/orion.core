@@ -84,7 +84,7 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
             : $shaper->order($this->lexical($index, $matcher, $query), $query->sorts);
         $page = array_slice($matches, ($query->page->page - 1) * $query->page->size, $query->page->size);
         $hits = array_map(
-            static fn(array $match): Hit => new Hit($match['id'], $match['score'], $match['source'], $shaper->highlights($match['source'], $query->highlights, $query->clauses)),
+            static fn(array $match): Hit => new Hit($match['id'], $match['score'], $matcher->withoutVectors($match['source']), $shaper->highlights($match['source'], $query->highlights, $query->clauses)),
             $page,
         );
 
@@ -99,7 +99,7 @@ final class InMemoryEngine implements SearchAdapter, SchemaAdapter, WriteAdapter
         $hits = [];
         foreach ($this->documents($index) as $id => $document) {
             if ($this->passesAll($matcher, $scope, $document['source']) && $native($document['source']) === true) {
-                $hits[] = new Hit((string) $id, 1.0, $document['source'], []);
+                $hits[] = new Hit((string) $id, 1.0, $matcher->withoutVectors($document['source']), []);
             }
         }
 

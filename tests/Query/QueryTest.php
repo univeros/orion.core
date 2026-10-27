@@ -100,6 +100,8 @@ final class QueryTest extends TestCase
         yield 'empty' => [Query::on('products')];
         yield 'hybrid' => [self::hybrid()];
         yield 'weighted' => [Query::on('products')->match('title', 'x')->vector('embedding', [1.0], k: 5)->fuse(Fusion::weighted(lexical: 0.3, vector: 0.7))];
+        yield 'a match over several weighted fields' => [Query::on('products')->match(['title' => 3.0, 'description' => 1.0], 'shoe')->term('sku', 'A1')];
+        yield 'a boosted single clause' => [Query::fromArray(['index' => 'products', 'query' => [['type' => 'prefix', 'field' => 'title', 'value' => 'sho', 'boost' => 2.5]]])];
         yield 'every clause and filter' => [
             Query::on('products')
                 ->term('in_stock', true)
@@ -140,6 +142,59 @@ final class QueryTest extends TestCase
         ], self::hybrid()->toArray());
     }
 
+    public function testAMatchReadsSeveralFieldsWithWeights(): void
+    {
+        $listed = Query::on('products')->match(['title', 'description'], 'shoe')->clauses[0];
+        $weighted = Query::on('products')->match(['title' => 3.0, 'description' => 1.0], 'shoe')->clauses[0];
+
+        self::assertSame(['title' => 1.0, 'description' => 1.0], $listed->fields);
+        self::assertSame('title', $listed->field);
+        self::assertSame(['title' => 3.0, 'description' => 1.0], $weighted->fields);
+        self::assertSame(['type' => 'match', 'fields' => ['title' => 3.0, 'description' => 1.0], 'value' => 'shoe'], $weighted->toArray());
+        self::assertEquals($weighted, Clause::fromArray(['type' => 'match', 'fields' => ['title' => 3.0, 'description' => 1.0], 'value' => 'shoe'], 'q'));
+        self::assertEquals($listed, Clause::fromArray(['type' => 'match', 'fields' => ['title', 'description'], 'value' => 'shoe'], 'q'));
+    }
+
+    public function testAClauseIsWeightedByFactorsPerField(): void
+    {
+        $clause = Clause::match(['title' => 2.0, 'description' => 1.0], 'shoe')->weighted(['title' => 3.0]);
+
+        self::assertSame(['title' => 6.0, 'description' => 1.0], $clause->fields);
+        self::assertSame(['type' => 'term', 'field' => 'sku', 'value' => 'A1', 'boost' => 2.0], Clause::term('sku', 'A1')->weighted(['sku' => 2.0])->toArray());
+        self::assertSame(['type' => 'term', 'field' => 'sku', 'value' => 'A1'], Clause::term('sku', 'A1')->toArray());
+    }
+
+    public function testOnlyAMatchReadsSeveralFields(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('only a match reads several fields');
+
+        Clause::fromArray(['type' => 'phrase', 'fields' => ['title', 'description'], 'value' => 'trail shoe'], 'q');
+    }
+
+    public function testTheLegsOfAHybridQueryAreBuiltFromIt(): void
+    {
+        $query = self::hybrid()->paginate(2, 10);
+
+        $lexical = $query->lexicalLeg(20);
+        $vector = $query->vectorLeg(20);
+
+        self::assertNull($lexical->vector);
+        self::assertNull($lexical->fusion);
+        self::assertEquals($query->clauses, $lexical->clauses);
+        self::assertEquals($query->filters, $lexical->filters);
+        self::assertSame(['title'], $lexical->highlights);
+        self::assertSame([], $lexical->sorts);
+        self::assertSame([], $vector->sorts);
+        self::assertSame(['page' => 1, 'size' => 20], $lexical->page->toArray());
+        self::assertSame([], $vector->clauses);
+        self::assertNotNull($vector->vector);
+        self::assertSame([], $vector->facets);
+        self::assertSame([], $vector->highlights);
+        self::assertEquals($query->filters, $vector->filters);
+        self::assertSame(20, $query->page->depth());
+    }
+
     public function testOmittedKeysTakeTheirDefaults(): void
     {
         self::assertEquals(Query::on('products'), Query::fromArray(['index' => 'products']));
@@ -172,6 +227,10 @@ final class QueryTest extends TestCase
         yield 'zero page' => [['index' => 'products', 'page' => ['page' => 0, 'size' => 20]], 'query.page.page'];
         yield 'non-numeric vector' => [['index' => 'products', 'vector' => ['field' => 'embedding', 'vector' => ['a'], 'k' => 5]], 'query.vector.vector[0]'];
         yield 'bad fusion' => [['index' => 'products', 'fusion' => ['strategy' => 'borda']], 'query.fusion.strategy'];
+        yield 'field and fields' => [['index' => 'products', 'query' => [['type' => 'match', 'field' => 'title', 'fields' => ['title'], 'value' => 'x']]], 'query.query[0] needs field or fields'];
+        yield 'boost with fields' => [['index' => 'products', 'query' => [['type' => 'match', 'fields' => ['title'], 'boost' => 2, 'value' => 'x']]], 'query.query[0].boost'];
+        yield 'empty fields' => [['index' => 'products', 'query' => [['type' => 'match', 'fields' => [], 'value' => 'x']]], 'query.query[0].fields'];
+        yield 'non-numeric weight' => [['index' => 'products', 'query' => [['type' => 'match', 'fields' => ['title' => 'high'], 'value' => 'x']]], 'query.query[0].fields.title'];
         yield 'bad index' => [['index' => 'Products!'], 'index name'];
     }
 
@@ -194,6 +253,10 @@ final class QueryTest extends TestCase
         $match = static fn(string $field, string $value = 'x'): array => ['query' => [['type' => 'match', 'field' => $field, 'value' => $value]]];
 
         yield 'wildcard field' => [$match('*')];
+        yield 'wildcard in fields' => [['query' => [['type' => 'match', 'fields' => ['*'], 'value' => 'x']]]];
+        yield 'zero weight' => [['query' => [['type' => 'match', 'fields' => ['title' => 0], 'value' => 'x']]]];
+        yield 'negative boost' => [['query' => [['type' => 'term', 'field' => 'sku', 'value' => 'x', 'boost' => -1]]]];
+        yield 'non-finite boost' => [['query' => [['type' => 'term', 'field' => 'sku', 'value' => 'x', 'boost' => INF]]]];
         yield 'metadata field' => [$match('_source')];
         yield 'newline field' => [$match("title\n")];
         yield 'local params facet' => [['facets' => [['field' => '{!terms=a}brand']]]];
