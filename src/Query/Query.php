@@ -9,6 +9,7 @@ use Orion\Support\Assert;
 use Orion\Support\Input;
 
 use function array_map;
+use function count;
 use function get_object_vars;
 
 /**
@@ -18,6 +19,12 @@ use function get_object_vars;
 final readonly class Query
 {
     public const int DEFAULT_PAGE_SIZE = 20;
+    /** Ceilings of the declarative form's lists, so one query cannot build an arbitrarily large request. */
+    public const int MAX_CLAUSES = 64;
+    public const int MAX_FILTERS = 64;
+    public const int MAX_SORTS = 8;
+    public const int MAX_FACETS = 16;
+    public const int MAX_HIGHLIGHTS = 16;
 
     /**
      * @param list<Clause> $clauses scored, conjunctive
@@ -178,14 +185,16 @@ final readonly class Query
             $highlights[] = Assert::fieldPath(Input::string($field, $path . '.highlight[' . $i . ']'), $path . '.highlight[' . $i . ']');
         }
 
+        Assert::atMost(count($highlights), self::MAX_HIGHLIGHTS, $path . '.highlight');
+
         return new self(
             IndexName::of(Input::string($data['index'], $path . '.index')),
-            self::each($data['query'] ?? [], $path . '.query', Clause::fromArray(...)),
+            self::each($data['query'] ?? [], $path . '.query', self::MAX_CLAUSES, Clause::fromArray(...)),
             isset($data['vector']) ? VectorClause::fromArray($data['vector'], $path . '.vector') : null,
             isset($data['fusion']) ? Fusion::fromArray($data['fusion'], $path . '.fusion') : null,
-            self::each($data['filters'] ?? [], $path . '.filters', Filter::fromArray(...)),
-            self::each($data['sort'] ?? [], $path . '.sort', Sort::fromArray(...)),
-            self::each($data['facets'] ?? [], $path . '.facets', Facet::fromArray(...)),
+            self::each($data['filters'] ?? [], $path . '.filters', self::MAX_FILTERS, Filter::fromArray(...)),
+            self::each($data['sort'] ?? [], $path . '.sort', self::MAX_SORTS, Sort::fromArray(...)),
+            self::each($data['facets'] ?? [], $path . '.facets', self::MAX_FACETS, Facet::fromArray(...)),
             $highlights,
             isset($data['page']) ? Page::fromArray($data['page'], $path . '.page') : new Page(1, self::DEFAULT_PAGE_SIZE),
         );
@@ -196,10 +205,12 @@ final readonly class Query
      * @param callable(mixed, string): T $read
      * @return list<T>
      */
-    private static function each(mixed $data, string $path, callable $read): array
+    private static function each(mixed $data, string $path, int $max, callable $read): array
     {
+        $list = Input::list($data, $path);
+        Assert::atMost(count($list), $max, $path);
         $items = [];
-        foreach (Input::list($data, $path) as $i => $item) {
+        foreach ($list as $i => $item) {
             $items[] = $read($item, $path . '[' . $i . ']');
         }
 

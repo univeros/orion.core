@@ -9,6 +9,7 @@ use Orion\Support\Assert;
 use Orion\Support\Input;
 
 use function array_map;
+use function count;
 
 /**
  * Composition: every `must`, at least one `should` when any is given, no `mustNot`.
@@ -61,8 +62,10 @@ final readonly class BoolFilter extends Filter
      */
     private static function filters(mixed $data, string $path, int $depth): array
     {
+        $list = Input::list($data, $path);
+        Assert::atMost(count($list), Filter::MAX_CHILDREN, $path);
         $filters = [];
-        foreach (Input::list($data, $path) as $i => $filter) {
+        foreach ($list as $i => $filter) {
             $filters[] = Filter::fromArray($filter, $path . '[' . $i . ']', $depth + 1);
         }
 

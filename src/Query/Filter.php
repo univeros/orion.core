@@ -18,6 +18,8 @@ abstract readonly class Filter
 {
     /** How deep bool filters may nest in declarative input. */
     public const int MAX_DEPTH = 10;
+    /** Children per bool clause list, so one filter cannot build an arbitrarily large request. */
+    public const int MAX_CHILDREN = 64;
 
     public static function term(string $field, string|int|float|bool $value): TermFilter
     {
